@@ -189,11 +189,17 @@ class AudioCapture:
                 qsize = self.queue.qsize()
             except Exception:
                 qsize = -1
-            log.info(
-                "Audio enqueue: count=%d queue=%s input_rate=%d",
+            # Compute RMS for quick level diagnostics (frame is int16)
+            try:
+                rms = float((frame.astype('float32') / 32768.0).std())
+            except Exception:
+                rms = 0.0
+            log.debug(
+                "Audio enqueue: count=%d queue=%s input_rate=%d rms=%.5f",
                 self._enqueue_count,
                 qsize,
                 self._input_sample_rate,
+                rms,
             )
 
     def _device_default_sample_rate(self) -> float:

@@ -1,21 +1,18 @@
-# Voice command mappings
-# Each entry maps a spoken phrase to a macro name.
-# id:     stable UUID used by the API for PUT/DELETE operations
-# phrase: the spoken phrase that triggers the macro (case-insensitive)
-# macro:  name of a macro from macros.yaml
-
-- id: "a1b2c3d4-0001-0000-0000-000000000001"
-  phrase: "turn on the projector"
-  macro: "projector_on"
-
-- id: "a1b2c3d4-0002-0000-0000-000000000002"
-  phrase: "turn on the receiver"
-  macro: "receiver_on"
-
-- id: "a1b2c3d4-0003-0000-0000-000000000003"
-  phrase: "home theater on"
-  macro: "home_theater_on"
-
-- id: "a1b2c3d4-0004-0000-0000-000000000004"
-  phrase: "home theater off"
-  macro: "home_theater_off"
+- id: a1b2c3d4-0001-0000-0000-000000000001
+  macro: projector_on
+  phrase: turn on the projector
+- id: a1b2c3d4-0002-0000-0000-000000000002
+  macro: receiver_on
+  phrase: turn on the receiver
+- id: a1b2c3d4-0003-0000-0000-000000000003
+  macro: home_theater_on
+  phrase: home theater on
+- id: a1b2c3d4-0004-0000-0000-000000000004
+  macro: home_theater_off
+  phrase: home theater off
+- id: a1b2c3d4-0004-0000-0000-000000000005
+  macro: TestIR
+  phrase: ir test
+- id: db7d3a22-b617-4a5a-8ae2-bbadf286f442
+  macro: projector_off
+  phrase: turn off the projector

@@ -357,6 +357,11 @@ def _home_html() -> str:
       .mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
       .hint {{ color: #666; font-size: 0.92rem; }}
       #toast {{ margin-top: 0.6rem; color: #0a5; }}
+      table.vc-table {{ width:100%; border-collapse:collapse; font-size:0.93rem; margin-top:0.5rem; }}
+      table.vc-table th {{ text-align:left; border-bottom:2px solid #ddd; padding:0.25rem 0.4rem; }}
+      table.vc-table td {{ border-bottom:1px solid #eee; padding:0.3rem 0.4rem; vertical-align:middle; }}
+      table.vc-table tr:hover td {{ background:#f9f9f9; }}
+      .vc-edit-row {{ background:#fffbe6 !important; }}
     </style>
   </head>
   <body>
@@ -401,6 +406,24 @@ def _home_html() -> str:
         <div class="row"><button id="btn-run-macro">Run</button><button id="btn-delete-macro">Delete</button><button id="btn-load-macro">Load Into Builder</button></div>
         <div id="macros-result" class="hint"></div>
       </div>
+    </div>
+
+    <div class="panel" style="margin-top:0.9rem;">
+      <h2>Voice Commands</h2>
+      <p class="hint">Map a spoken phrase to a macro. Say the wake word, then the phrase.</p>
+      <div class="row">
+        <label>Phrase</label>
+        <input id="vc-phrase" type="text" placeholder="e.g. turn on the lights" style="min-width:220px;" />
+        <label style="min-width:50px;">Macro</label>
+        <input id="vc-macro" type="text" placeholder="e.g. lights_on" />
+        <button id="btn-vc-save">Add</button>
+        <button id="btn-vc-cancel" style="display:none;">Cancel</button>
+      </div>
+      <div id="vc-result" class="hint"></div>
+      <table class="vc-table" id="vc-table">
+        <thead><tr><th>Phrase</th><th>Macro</th><th style="width:120px;"></th></tr></thead>
+        <tbody id="vc-tbody"></tbody>
+      </table>
     </div>
 
     <div class="panel" style="margin-top:0.9rem;">
@@ -561,10 +584,91 @@ def _home_html() -> str:
         show("macro-build-result", `Loaded '${{name}}' into builder.`);
       }};
 
+      // ── Voice Commands ────────────────────────────────────────────────
+      let vcEditingId = null;
+
+      async function refreshVoiceCommands() {{
+        const cmds = await api('/api/voice/commands');
+        const tbody = $("vc-tbody");
+        tbody.innerHTML = "";
+        cmds.forEach(cmd => {{
+          const tr = document.createElement("tr");
+          tr.dataset.id = cmd.id;
+          tr.innerHTML = `
+            <td class="mono">${{cmd.phrase}}</td>
+            <td class="mono">${{cmd.macro}}</td>
+            <td>
+              <button onclick="vcStartEdit('${{cmd.id}}','${{cmd.phrase.replace(/'/g,"\\'")}}',${{JSON.stringify(cmd.macro)}})">Edit</button>
+              <button onclick="vcDelete('${{cmd.id}}')">Delete</button>
+            </td>`;
+          tbody.appendChild(tr);
+        }});
+      }}
+
+      function vcStartEdit(id, phrase, macro) {{
+        vcEditingId = id;
+        $("vc-phrase").value = phrase;
+        $("vc-macro").value = macro;
+        $("btn-vc-save").textContent = "Update";
+        $("btn-vc-cancel").style.display = "";
+        // Highlight the row being edited
+        document.querySelectorAll("#vc-tbody tr").forEach(tr => {{
+          tr.classList.toggle("vc-edit-row", tr.dataset.id === id);
+        }});
+        $("vc-phrase").focus();
+      }}
+
+      function vcCancelEdit() {{
+        vcEditingId = null;
+        $("vc-phrase").value = "";
+        $("vc-macro").value = "";
+        $("btn-vc-save").textContent = "Add";
+        $("btn-vc-cancel").style.display = "none";
+        document.querySelectorAll("#vc-tbody tr").forEach(tr => tr.classList.remove("vc-edit-row"));
+      }}
+
+      async function vcDelete(id) {{
+        try {{
+          await api(`/api/voice/commands/${{encodeURIComponent(id)}}`, {{method:'DELETE'}});
+          if (vcEditingId === id) vcCancelEdit();
+          await refreshVoiceCommands();
+          show("vc-result", "Deleted.");
+        }} catch(e) {{ show("vc-result", `Error: ${{e.message}}`); }}
+      }}
+
+      $("btn-vc-cancel").onclick = vcCancelEdit;
+
+      $("btn-vc-save").onclick = async () => {{
+        const phrase = $("vc-phrase").value.trim();
+        const macro  = $("vc-macro").value.trim();
+        if (!phrase) {{ show("vc-result", "Phrase is required."); return; }}
+        if (!macro)  {{ show("vc-result", "Macro is required.");  return; }}
+        try {{
+          if (vcEditingId) {{
+            await api(`/api/voice/commands/${{encodeURIComponent(vcEditingId)}}`, {{
+              method:'PUT', headers:{{'Content-Type':'application/json'}},
+              body: JSON.stringify({{phrase, macro}})
+            }});
+            show("vc-result", `Updated command.`);
+            vcCancelEdit();
+          }} else {{
+            await api('/api/voice/commands', {{
+              method:'POST', headers:{{'Content-Type':'application/json'}},
+              body: JSON.stringify({{phrase, macro}})
+            }});
+            show("vc-result", `Added '${{phrase}}'.`);
+            $("vc-phrase").value = "";
+            $("vc-macro").value = "";
+          }}
+          await refreshVoiceCommands();
+        }} catch(e) {{ show("vc-result", `Error: ${{e.message}}`); }}
+      }};
+
       (async function init() {{
         try {{
           await refreshSignals();
           await refreshMacros();
+          await refreshVoiceCommands();
           show("toast", "Panel ready.");
         }} catch (e) {{
           show("toast", `Startup error: ${{e.message}}`);

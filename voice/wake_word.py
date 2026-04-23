@@ -13,6 +13,7 @@ import threading
 from typing import Optional
 
 import numpy as np
+from voice.audio import FRAME_SAMPLES
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +89,9 @@ class WakeWordDetector:
             )
         log.info("Wake word model loaded (threshold=%.2f)", self._threshold)
 
+        # Resolved model key used in predictions (may differ from configured name)
+        self._model_key = model_name
+
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run,
@@ -110,9 +114,14 @@ class WakeWordDetector:
     def _run(self) -> None:
         import time
 
-        model_key = self._model_name
+        model_key = getattr(self, "_model_key", self._model_name)
         log.debug("Wake word detection thread started")
         frame_count = 0
+
+        # Overlapping windows: buffer incoming frames and slide by 50% hop so
+        # a wake word that straddles a frame boundary is still detected.
+        hop = FRAME_SAMPLES // 2
+        buffer = np.array([], dtype=np.int16)
 
         while not self._stop_event.is_set():
             try:
@@ -120,38 +129,66 @@ class WakeWordDetector:
             except queue.Empty:
                 continue
 
-            frame_count += 1
+            # Append incoming frame to the overlap buffer.
+            buffer = np.concatenate((buffer, frame.astype(np.int16, copy=False)))
 
-            # openWakeWord expects float32 in range [-1, 1]
-            frame_f32 = frame.astype(np.float32) / 32768.0
-            predictions = self._model.predict(frame_f32)
+            # Evaluate every hop-sized advance while we have a full window.
+            while buffer.shape[0] >= FRAME_SAMPLES:
+                window = buffer[:FRAME_SAMPLES]
+                buffer = buffer[hop:]           # advance by hop (50% overlap)
+                frame_count += 1
 
-            # predictions is a dict: {model_name: score}
-            score = predictions.get(model_key, 0.0)
+                frame_f32 = window.astype(np.float32) / 32768.0
+                predictions = self._model.predict(window)  # int16 required by openwakeword preprocessor
+                score = predictions.get(model_key, 0.0)
 
-            if self._log_scores and (frame_count % self._log_every) == 0:
-                try:
-                    qsize = self._audio_queue.qsize()
-                except Exception:
-                    qsize = -1
-                log.info(
-                    "WakeWord score: model=%r frame=%d queue=%s score=%.3f",
-                    model_key,
-                    frame_count,
-                    qsize,
-                    float(score),
-                )
-
-            if score >= self._threshold:
-                log.info("Wake word detected! model=%r score=%.3f", model_key, score)
-                self.wake_event.set()
-                # Cooldown: drain the queue and sleep to avoid re-triggering
-                time.sleep(self._cooldown_s)
-                # Flush any frames that accumulated during cooldown
-                while not self._audio_queue.empty():
+                # Optional periodic score logging
+                if self._log_scores and (model_key not in predictions):
                     try:
-                        self._audio_queue.get_nowait()
-                    except queue.Empty:
-                        break
+                        top = max(predictions.items(), key=lambda kv: kv[1])
+                    except Exception:
+                        top = (None, 0.0)
+                    log.info(
+                        "WakeWord missing key: expected=%r available=%r top=%r",
+                        model_key,
+                        list(predictions.keys()),
+                        top,
+                    )
+
+                if self._log_scores and (frame_count % self._log_every) == 0:
+                    try:
+                        qsize = self._audio_queue.qsize()
+                    except Exception:
+                        qsize = -1
+                    try:
+                        rms = float(np.sqrt(np.mean(frame_f32 * frame_f32)))
+                    except Exception:
+                        rms = 0.0
+                    try:
+                        top = max(predictions.items(), key=lambda kv: kv[1])
+                    except Exception:
+                        top = (None, 0.0)
+                    log.debug(
+                        "WakeWord score: model=%r frame=%d queue=%s score=%.3f rms=%.5f top=%r top_score=%.3f",
+                        model_key,
+                        frame_count,
+                        qsize,
+                        float(score),
+                        rms,
+                        top[0],
+                        float(top[1]),
+                    )
+
+                if score >= self._threshold:
+                    log.info("Wake word detected! model=%r score=%.3f", model_key, score)
+                    self.wake_event.set()
+                    # Cooldown: clear buffer, drain the queue, sleep.
+                    buffer = np.array([], dtype=np.int16)
+                    time.sleep(self._cooldown_s)
+                    while not self._audio_queue.empty():
+                        try:
+                            self._audio_queue.get_nowait()
+                        except queue.Empty:
+                            break
 
         log.debug("Wake word detection thread stopped")

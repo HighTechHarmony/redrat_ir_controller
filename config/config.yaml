@@ -25,7 +25,7 @@ voice:
   wake_word_model: "hey_jarvis_v0.1"
 
   # Detection score threshold (0.0–1.0). Lower = more sensitive but more false positives.
-  wake_word_threshold: 0.5
+  wake_word_threshold: 0.3
 
   # Path to the extracted Vosk model directory.
   vosk_model_path: "models/vosk-model-small-en-us-0.15"
@@ -37,7 +37,7 @@ voice:
   command_match_threshold: 70
 
   # Debug/logging options
-  debug_wake: false
-  wake_log_every: 50
-  debug_audio: false
-  audio_log_every: 100
+  debug_wake: true
+  wake_log_every: 1
+  debug_audio: true
+  audio_log_every: 1

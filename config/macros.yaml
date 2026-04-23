@@ -20,6 +20,10 @@ home_theater_on:
   signal: receiver_power
 - delay_ms: 500
   signal: receiver_input_hdmi1
+projector_off:
+- signal: projector_power
+- signal: __delay_1s__
+- signal: projector_power
 projector_on:
 - delay_ms: 8000
   signal: projector_power
