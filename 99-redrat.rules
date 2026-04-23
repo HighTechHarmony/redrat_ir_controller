@@ -1,0 +1,16 @@
+# udev rule granting read/write access to the RedRat3 USB device
+# for all users in the 'plugdev' group without requiring root.
+#
+# Install:
+#   sudo cp 99-redrat.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#
+# Then add your user to the plugdev group (log out and back in after):
+#   sudo usermod -aG plugdev $USER
+
+# RedRat3 original (PID 0x0001)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="112a", ATTRS{idProduct}=="0001", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# RedRat3-II (PID 0x0005)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="112a", ATTRS{idProduct}=="0005", MODE="0660", GROUP="plugdev", TAG+="uaccess"

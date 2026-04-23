@@ -1,0 +1,21 @@
+# Core
+pyusb>=1.2.1
+PyYAML>=6.0
+flask>=3.0
+
+# Audio capture
+sounddevice>=0.5.0
+# tflite_runtime/openWakeWord currently require NumPy 1.x ABI
+numpy>=1.24,<2
+
+# Speech recognition
+vosk>=0.3.45
+
+# Wake word
+openwakeword>=0.6.0
+
+# Fuzzy command matching
+rapidfuzz>=3.9
+
+# Development / testing
+pytest>=8.0

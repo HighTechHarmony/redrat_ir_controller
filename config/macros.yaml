@@ -1,0 +1,28 @@
+TestIR:
+- signal: projector_power
+- signal: __delay_1s__
+- signal: projector_power
+- signal: __delay_1s__
+- signal: projector_power
+- signal: __delay_1s__
+- signal: projector_power
+- signal: __delay_1s__
+- signal: projector_power
+home_theater_off:
+- delay_ms: 500
+  signal: receiver_power
+- delay_ms: 500
+  signal: projector_power
+home_theater_on:
+- delay_ms: 8000
+  signal: projector_power
+- delay_ms: 2000
+  signal: receiver_power
+- delay_ms: 500
+  signal: receiver_input_hdmi1
+projector_on:
+- delay_ms: 8000
+  signal: projector_power
+receiver_on:
+- delay_ms: 2000
+  signal: receiver_power
