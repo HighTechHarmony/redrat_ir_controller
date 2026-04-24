@@ -32,6 +32,9 @@ from redrat.protocol import (
     RR3_BLINK_LED,
     RR3_READ_SER_NO,
     IRDATA_PACKET_SIZE,
+    _HEADER_FMT,
+    _HEADER_SIZE,
+    _LENS_SIZE,
     decode_irdata,
     encode_irdata,
 )
@@ -46,6 +49,9 @@ _CTRL_OUT = usb.util.CTRL_OUT | usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_RECIPI
 _BULK_TIMEOUT_MS = 2000
 # Timeout for control transfers (milliseconds)
 _CTRL_TIMEOUT_MS = 3000
+# Timeout for the TX trigger control request — the device may not respond until
+# the IR burst has finished transmitting (Linux kernel uses 10 s).
+_TX_CTRL_TIMEOUT_MS = 10000
 # Firmware version response size
 _FW_VERSION_LEN = 64
 # Serial number response size (4 bytes → 8 hex chars as ASCII)
@@ -196,22 +202,27 @@ class RedRatDevice:
             timeout=_CTRL_TIMEOUT_MS,
         )
 
-    def _tx_send_signal(self) -> bytes:
+    def _tx_send_signal(self) -> None:
         """
         Trigger transmission of the signal previously written via bulk-out.
 
-        Per the upstream Linux driver, RR3_TX_SEND_SIGNAL is a vendor IN
-        control request returning a small status payload.
+        Per the upstream Linux driver (redrat3_send_cmd), this is a vendor IN
+        control request that returns exactly 1 status byte.  A non-zero byte
+        means the firmware rejected the command.
         """
         result = self._dev.ctrl_transfer(
             bmRequestType=_CTRL_IN,
             bRequest=RR3_TX_SEND_SIGNAL,
             wValue=0,
             wIndex=0,
-            data_or_wLength=2,
-            timeout=_CTRL_TIMEOUT_MS,
+            data_or_wLength=1,
+            timeout=_TX_CTRL_TIMEOUT_MS,
         )
-        return bytes(result)
+        status = bytes(result)[0] if result else 0xFF
+        if status != 0x00:
+            raise RedRatError(
+                f"Device rejected TX trigger (status=0x{status:02X})"
+            )
 
     def reset(self) -> None:
         """Soft-reset the device."""
@@ -353,21 +364,30 @@ class RedRatDevice:
         except ValueError as exc:
             raise RedRatError(f"Failed to encode IR signal: {exc}") from exc
 
+        # The firmware expects only the header + full lens table + sig_size bytes
+        # of sigdata — matching the Linux kernel driver's redrat3_transmit_ir():
+        #   len = sizeof(*irdata) - sizeof(irdata->sigdata) + sig_size
+        # Sending the full padded 1044-byte packet overflows the device buffer.
+        import struct as _struct
+        sig_size = _struct.unpack_from(">H", packet, 16)[0]
+        tx_packet = packet[:_HEADER_SIZE + _LENS_SIZE + sig_size]
+
         log.debug(
-            "Sending signal: carrier=%dHz, %d timings, packet=%d bytes",
+            "Sending signal: carrier=%dHz, %d timings, packet=%d bytes (trimmed from %d)",
             ir.carrier_hz,
             len(ir.timings_us),
+            len(tx_packet),
             len(packet),
         )
 
         try:
-            written = self._dev.write(RR3_EP_TX, packet, timeout=_BULK_TIMEOUT_MS)
+            written = self._dev.write(RR3_EP_TX, tx_packet, timeout=_BULK_TIMEOUT_MS)
         except usb.core.USBError as exc:
             raise RedRatError(f"USB write error: {exc}") from exc
 
-        if written != len(packet):
+        if written != len(tx_packet):
             raise RedRatError(
-                f"Incomplete USB write: sent {written} of {len(packet)} bytes"
+                f"Incomplete USB write: sent {written} of {len(tx_packet)} bytes"
             )
 
         # Trigger transmission (vendor IN control request)
