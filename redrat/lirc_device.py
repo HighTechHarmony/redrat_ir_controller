@@ -21,7 +21,10 @@ import struct
 import time
 from typing import List, Optional
 
-from redrat.protocol import IrData
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from redrat.protocol import IrData
 
 log = logging.getLogger(__name__)
 
@@ -208,7 +211,7 @@ class LircDevice:
     # IR transmit
     # ------------------------------------------------------------------
 
-    def send(self, ir: IrData) -> None:
+    def send(self, ir) -> None:
         """
         Transmit an IR signal via LIRC PULSE mode.
 
@@ -218,6 +221,7 @@ class LircDevice:
         if self._fd is None:
             raise LircError("Device is not open")
 
+        # Import IrData at runtime only for isinstance checks if needed
         timings = list(ir.timings_us)
 
         # LIRC requires an odd number of values (must start AND end with pulse).
@@ -273,7 +277,7 @@ class LircDevice:
     # IR receive / learning
     # ------------------------------------------------------------------
 
-    def learn(self, timeout_s: float = 10.0) -> IrData:
+    def learn(self, timeout_s: float = 10.0):
         """
         Receive a single IR burst and return it as IrData.
 
@@ -364,11 +368,22 @@ class LircDevice:
         return self._build_irdata(timings_us, carrier_hz)
 
     @staticmethod
-    def _build_irdata(timings_us: list[int], carrier_hz: int) -> IrData:
+    def _build_irdata(timings_us: list[int], carrier_hz: int):
         # Strip trailing space (if any) — LIRC bursts often end with a space
         # before the TIMEOUT packet; we only want the active signal content.
         while timings_us and len(timings_us) % 2 == 0:
             timings_us = timings_us[:-1]
+
+        # Import here to avoid a hard dependency at module import time.
+        try:
+            from redrat.protocol import IrData
+        except Exception:
+            # Fallback minimal structure if IrData is not available
+            class IrData:
+                def __init__(self, carrier_hz, timings_us, no_repeats=0):
+                    self.carrier_hz = carrier_hz
+                    self.timings_us = timings_us
+                    self.no_repeats = no_repeats
 
         return IrData(
             carrier_hz=carrier_hz if carrier_hz > 0 else 38_000,

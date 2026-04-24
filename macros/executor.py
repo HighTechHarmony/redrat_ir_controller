@@ -18,8 +18,10 @@ from pathlib import Path
 from typing import Dict, List
 
 import yaml
+from typing import TYPE_CHECKING
 
-from redrat.device import RedRatDevice, RedRatError
+if TYPE_CHECKING:
+    from redrat.device import RedRatDevice
 from redrat.store import SignalStore, SignalNotFoundError
 
 log = logging.getLogger(__name__)
@@ -44,7 +46,7 @@ class MacroExecutor:
         self,
         macro_path: str | Path,
         signal_store: SignalStore,
-        device: RedRatDevice,
+        device,
     ) -> None:
         self._path = Path(macro_path)
         self._store = signal_store

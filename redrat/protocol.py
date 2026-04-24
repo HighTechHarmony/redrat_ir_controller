@@ -53,7 +53,7 @@ RR3_BLINK_LED = 0xB9
 RR3_READ_SER_NO = 0xBA
 RR3_RC_DET_ENABLE = 0xBB
 RR3_RC_DET_DISABLE = 0xBC
-RR3_RC_DET_STATUS = 0xBD
+RR3_RC_DETStatus = 0xBD
 
 # ---------------------------------------------------------------------------
 # IR parameter indices (used with RR3_SET_IR_PARAM / RR3_GET_IR_PARAM)
@@ -115,16 +115,12 @@ IRDATA_PACKET_SIZE = _HEADER_SIZE + _LENS_SIZE + _SIGDATA_SIZE  # 1044 bytes
 # ---------------------------------------------------------------------------
 
 def carrier_to_mod_freq_count(carrier_hz: int) -> int:
-    """Convert a carrier frequency (Hz) to the mod_freq_count field value."""
     return 65536 - (RR3_CARRIER_FREQ_BASE // carrier_hz)
 
 
 def mod_freq_count_to_carrier(mod_freq_count: int, num_periods: int = 1) -> int:
-    """Recover the carrier frequency from the packet header fields."""
     if num_periods == 0:
         return RR3_DEFAULT_CARRIER_HZ
-    # The device measures num_periods cycles over (65536 - mod_freq_count) ticks
-    # at 6 MHz, so: carrier = 6_000_000 * num_periods / (65536 - mod_freq_count)
     divisor = 65536 - mod_freq_count
     if divisor <= 0:
         return RR3_DEFAULT_CARRIER_HZ
@@ -132,47 +128,26 @@ def mod_freq_count_to_carrier(mod_freq_count: int, num_periods: int = 1) -> int:
 
 
 def us_to_rr3(microseconds: int) -> int:
-    """Convert a duration in µs to RedRat3 time units (0.5 µs per tick)."""
     return (microseconds * RR3_CLOCK_HZ) // 1_000_000
 
 
 def rr3_to_us(ticks: int) -> int:
-    """Convert RedRat3 time units to microseconds."""
     return (ticks * 1_000_000) // RR3_CLOCK_HZ
 
 
-# ---------------------------------------------------------------------------
-# Data class
-# ---------------------------------------------------------------------------
-
 @dataclass
 class IrData:
-    """Decoded representation of a redrat3_irdata packet."""
     carrier_hz: int
-    timings_us: List[int]   # alternating pulse/space durations in µs
+    timings_us: List[int]
     pause_us: int = 0
     no_repeats: int = 0
 
 
-# ---------------------------------------------------------------------------
-# Encoder
-# ---------------------------------------------------------------------------
-
 def encode_irdata(ir: IrData) -> bytes:
-    """
-    Encode an IrData into a raw redrat3_irdata packet (bytes) ready to be
-    sent via bulk-out to the RedRat3.
-
-    Raises ValueError if the signal has too many distinct lengths or too
-    many timing values to fit in the packet.
-    """
     timings = ir.timings_us
     if not timings:
         raise ValueError("timings_us must not be empty")
 
-    # Build a table of unique lengths (in RR3 ticks), preserving order of
-    # first appearance to keep the index numbering deterministic.
-    # Clamp to uint16 max (65535) — long final pauses can exceed 32 ms at 2 ticks/µs.
     tick_values = [min(us_to_rr3(t), 65535) for t in timings]
 
     unique_ticks: list[int] = []
@@ -180,77 +155,49 @@ def encode_irdata(ir: IrData) -> bytes:
     for v in tick_values:
         if v not in seen:
             if len(unique_ticks) >= RR3_MAX_DISTINCT_LENGTHS:
-                raise ValueError(
-                    f"Signal has more than {RR3_MAX_DISTINCT_LENGTHS} distinct "
-                    f"pulse/space lengths — cannot encode (0x7F is reserved "
-                    f"as the end-of-signal marker)."
-                )
+                raise ValueError("too many distinct lengths")
             seen[v] = len(unique_ticks)
             unique_ticks.append(v)
 
-    # Build sigdata: indices into unique_ticks[], terminated with 0x7f
     sigdata_list: list[int] = [seen[v] for v in tick_values]
     sigdata_list.append(RR3_END_OF_SIGNAL)
 
     sig_size = len(sigdata_list)
     if sig_size > RR3_MAX_SIG_SIZE:
-        raise ValueError(
-            f"Signal data ({sig_size} bytes) exceeds maximum "
-            f"packet size ({RR3_MAX_SIG_SIZE} bytes)."
-        )
+        raise ValueError("signal too large")
 
     no_lengths = len(unique_ticks)
     mod_freq_count = carrier_to_mod_freq_count(ir.carrier_hz)
     pause_ticks = us_to_rr3(ir.pause_us)
 
-    # The 'length' field covers everything after itself (total packet minus the 2-byte length field).
     body_length = IRDATA_PACKET_SIZE - 2
 
     header = struct.pack(
         _HEADER_FMT,
-        body_length,          # length
-        RR3_MOD_SIGNAL_OUT,   # transfer_type
-        pause_ticks,          # pause
-        mod_freq_count,       # mod_freq_count
-        1,                    # num_periods (1 is sufficient for TX)
-        RR3_MAX_LENGTHS,      # max_lengths
-        no_lengths,           # no_lengths
-        RR3_MAX_SIG_SIZE,     # max_sig_size
-        sig_size,             # sig_size
-        ir.no_repeats,        # no_repeats
+        body_length,
+        RR3_MOD_SIGNAL_OUT,
+        pause_ticks,
+        mod_freq_count,
+        1,
+        RR3_MAX_LENGTHS,
+        no_lengths,
+        RR3_MAX_SIG_SIZE,
+        sig_size,
+        ir.no_repeats,
     )
 
-    # lens[] — pad with zeros to fill 255 slots
     lens_padded = unique_ticks + [0] * (RR3_MAX_LENGTHS - no_lengths)
     lens_bytes = struct.pack(_LENS_FMT, *lens_padded)
 
-    # sigdata[] — pad with 0x7f to fill 512 bytes
     sigdata_padded = sigdata_list + [RR3_END_OF_SIGNAL] * (RR3_MAX_SIG_SIZE - sig_size)
     sigdata_bytes = bytes(sigdata_padded)
 
     return header + lens_bytes + sigdata_bytes
 
 
-# ---------------------------------------------------------------------------
-# Decoder
-# ---------------------------------------------------------------------------
-
 def decode_irdata(data: bytes) -> IrData:
-    """
-    Decode a raw redrat3_irdata packet received from the wideband (learning)
-    endpoint into an IrData.
-
-    The device sends compact variable-length packets: no 3-byte header padding,
-    a lens[] table of max_lengths entries (not the full 255), and exactly
-    sig_size bytes of sigdata (not the full 512).  The full 1044-byte static
-    layout is only used for TX (encode_irdata).
-
-    Raises ValueError on malformed packets.
-    """
     if len(data) < _HEADER_SIZE_RX:
-        raise ValueError(
-            f"Packet too short for header: {len(data)} < {_HEADER_SIZE_RX} bytes"
-        )
+        raise ValueError("Packet too short for header")
 
     (
         _length,
@@ -266,21 +213,13 @@ def decode_irdata(data: bytes) -> IrData:
     ) = struct.unpack_from(_HEADER_FMT_RX, data, 0)
 
     if transfer_type != RR3_MOD_SIGNAL_IN:
-        raise ValueError(
-            f"Unexpected transfer_type 0x{transfer_type:04X} "
-            f"(expected 0x{RR3_MOD_SIGNAL_IN:04X})"
-        )
+        raise ValueError("Unexpected transfer_type")
 
-    # Detect whether this is a full TX-format packet (1044 bytes with 3 padding
-    # bytes after the 19-byte common header and a 255-slot lens table) or a compact
-    # RX packet from the device (no padding, max_lengths-slot lens table).
     if len(data) >= IRDATA_PACKET_SIZE:
-        # Full TX-format: 3 padding bytes push lens[] to offset _HEADER_SIZE (22)
         lens_slot_count = RR3_MAX_LENGTHS
         lens_fmt = _LENS_FMT
         lens_offset = _HEADER_SIZE
     else:
-        # Compact RX packet: no padding, variable lens table
         lens_slot_count = max_lengths if max_lengths else RR3_MAX_LENGTHS
         lens_fmt = f">{lens_slot_count}H"
         lens_offset = _HEADER_SIZE_RX
@@ -288,33 +227,24 @@ def decode_irdata(data: bytes) -> IrData:
     sigdata_offset = lens_offset + 2 * lens_slot_count
     min_size = sigdata_offset + sig_size
     if len(data) < min_size:
-        raise ValueError(
-            f"Packet too short for payload: {len(data)} < {min_size} bytes "
-            f"(max_lengths={max_lengths}, sig_size={sig_size})"
-        )
+        raise ValueError("Packet too short for payload")
 
     lens_raw = struct.unpack_from(lens_fmt, data, lens_offset)
     sigdata_raw = data[sigdata_offset: sigdata_offset + sig_size]
 
     lens_table = lens_raw[:no_lengths]
 
-    # Read sigdata up to the end-of-signal marker or sig_size
     timings_ticks: list[int] = []
     for i in range(sig_size):
         idx = sigdata_raw[i]
         if idx == RR3_END_OF_SIGNAL:
             break
         if idx >= no_lengths:
-            raise ValueError(
-                f"sigdata index {idx} out of range (no_lengths={no_lengths})"
-            )
+            raise ValueError("sigdata index out of range")
         timings_ticks.append(lens_table[idx])
 
     timings_us = [rr3_to_us(t) for t in timings_ticks]
 
-    # Carrier frequency encoding differs by format:
-    # - Full TX packet: mod_freq_count = 65536 - (6 MHz / carrier_hz), num_periods=1
-    # - Compact RX packet: mod_freq_count = RR3_CLOCK_HZ (2 MHz) ticks for num_periods cycles
     if len(data) >= IRDATA_PACKET_SIZE:
         carrier_hz = mod_freq_count_to_carrier(mod_freq_count, num_periods)
     elif mod_freq_count > 0 and num_periods > 0:

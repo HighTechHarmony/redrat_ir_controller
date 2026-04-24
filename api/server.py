@@ -12,15 +12,21 @@ import time
 from flask import Blueprint, Flask, jsonify, request
 
 from macros.executor import MacroExecutor, MacroNotFoundError, VIRTUAL_DELAY_1S, VIRTUAL_DELAY_10S
-from redrat.device import RedRatDevice, RedRatError
-from redrat.lirc_device import LircDevice, LircError
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+  from redrat.device import RedRatDevice, RedRatError
+  from redrat.lirc_device import LircDevice, LircError
+else:
+  from redrat.lirc_device import LircDevice, LircError
+
 from redrat.store import SignalNotFoundError, SignalStore
 from voice.store import VoiceCommandNotFoundError, VoiceCommandStore
 
 log = logging.getLogger(__name__)
 
 # Module-level singletons injected by main.py via create_app()
-_device: RedRatDevice | LircDevice | None = None
+_device: object | None = None
 _signal_store: SignalStore | None = None
 _macro_executor: MacroExecutor | None = None
 _voice_store: VoiceCommandStore | None = None
