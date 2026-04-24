@@ -35,6 +35,12 @@ class WakeWordDetector:
         cooldown_s: float = 2.0,
         log_scores: bool = False,
         log_every: int = 50,
+        *,
+        # Beep playback options when wake word fires
+        beep_on_wake: bool = False,
+        beep_device: Optional[str] = None,
+        beep_freq: int = 800,
+        beep_duration_s: float = 0.5,
     ) -> None:
         self._model_name = model_name
         self._audio_queue = audio_queue
@@ -45,10 +51,21 @@ class WakeWordDetector:
         self._stop_event = threading.Event()
         # Set by this detector when the wake word fires; cleared by the STT engine
         self.wake_event = threading.Event()
+        # Set by SpeechRecognizer while it is actively listening for a command;
+        # the detector checks this to suppress a second wake beep mid-session.
+        self.listening_event = threading.Event()
 
         # Logging options
         self._log_scores = bool(log_scores)
         self._log_every = int(log_every)
+        # Beep settings
+        self._beep_on_wake = bool(beep_on_wake)
+        self._beep_device = beep_device
+        self._beep_freq = int(beep_freq)
+        self._beep_duration_s = float(beep_duration_s)
+        # Timestamp of last beep/fire to enforce cooldown independent of
+        # `wake_event` being cleared by the STT thread.
+        self._last_fire = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -180,15 +197,74 @@ class WakeWordDetector:
                     )
 
                 if score >= self._threshold:
-                    log.info("Wake word detected! model=%r score=%.3f", model_key, score)
-                    self.wake_event.set()
-                    # Cooldown: clear buffer, drain the queue, sleep.
-                    buffer = np.array([], dtype=np.int16)
-                    time.sleep(self._cooldown_s)
-                    while not self._audio_queue.empty():
-                        try:
-                            self._audio_queue.get_nowait()
-                        except queue.Empty:
-                            break
+                    now = time.monotonic()
+                    # Enforce cooldown based on wall-clock time so that the
+                    # detector won't trigger multiple beeps even if the
+                    # recognizer clears `wake_event` quickly.
+                    if (now - getattr(self, "_last_fire", 0.0)) <= self._cooldown_s:
+                        # Skip logging/beep while still in cooldown.
+                        if self._log_scores:
+                            log.debug(
+                                "Wake word suppressed by cooldown (%.2fs remaining)",
+                                self._cooldown_s - (now - self._last_fire),
+                            )
+                        continue
+
+                    # Suppress wake beep (and re-trigger) while STT is
+                    # actively listening for a command.
+                    if self.listening_event.is_set():
+                        if self._log_scores:
+                            log.debug("Wake word suppressed — STT is currently listening")
+                        continue
+
+                    # Only set the wake event and play the beep if it is not
+                    # already set. This prevents multiple beeps when the model
+                    # fires repeatedly for the same utterance.
+                    if not self.wake_event.is_set():
+                        log.info("Wake word detected! model=%r score=%.3f", model_key, score)
+                        self._last_fire = now
+                        self.wake_event.set()
+                        if self._beep_on_wake:
+                            # Play a short beep in a non-blocking way. Import sounddevice lazily.
+                            # Log debug info so we can trace duplicate beeps (thread id
+                            # and timestamp) when diagnosing repeated triggers.
+                            try:
+                                log.debug(
+                                    "Wake beep requested: freq=%s dur=%.3f device=%r thread=%s",
+                                    self._beep_freq,
+                                    self._beep_duration_s,
+                                    self._beep_device,
+                                    threading.get_ident(),
+                                )
+                                import sounddevice as _sd
+
+                                # Query output device default samplerate and fall back to 16 kHz.
+                                try:
+                                    info = _sd.query_devices(self._beep_device, kind="output")
+                                    rate = int(info.get("default_samplerate", 16000))
+                                except Exception:
+                                    rate = 16000
+
+                                samples = int(round(self._beep_duration_s * rate))
+                                if samples <= 0:
+                                    raise ValueError("beep_duration_s too small")
+                                t = np.arange(samples, dtype=np.float32) / float(rate)
+                                wave = (0.3 * np.sin(2.0 * np.pi * float(self._beep_freq) * t)).astype(np.float32)
+                                # sounddevice.play is non-blocking when blocking=False
+                                try:
+                                    _sd.play(wave, samplerate=rate, device=self._beep_device, blocking=False)
+                                except Exception as _exc:
+                                    log.warning("Beep playback failed: %s", _exc)
+                            except Exception:
+                                log.debug("sounddevice not available for beep playback or failed to configure")
+
+                        # Cooldown: clear buffer, drain the queue, sleep.
+                        buffer = np.array([], dtype=np.int16)
+                        time.sleep(self._cooldown_s)
+                        while not self._audio_queue.empty():
+                            try:
+                                self._audio_queue.get_nowait()
+                            except queue.Empty:
+                                break
 
         log.debug("Wake word detection thread stopped")

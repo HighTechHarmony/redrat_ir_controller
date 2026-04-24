@@ -144,6 +144,9 @@ class SpeechRecognizer:
 
             # Wake word fired — start transcribing
             self._wake_event.clear()
+            # Signal detector to suppress wake beep while we are listening.
+            if hasattr(self, "_listening_event"):
+                self._listening_event.set()
             self.status["state"] = "listening"
             log.info("Wake word detected — listening for command (timeout=%.1fs)", self._command_timeout_s)
 
@@ -177,14 +180,70 @@ class SpeechRecognizer:
                 transcript = final.get("text", "").strip()
 
             self.status["state"] = "idle"
+            # STT done listening — allow wake beep again.
+            if hasattr(self, "_listening_event"):
+                self._listening_event.clear()
 
             if transcript and transcript != "[unk]":
                 log.info("Transcription: %r", transcript)
+                # Play acknowledgement beep: 800Hz for 0.25s, then 1600Hz for 0.25s
+                try:
+                    import sounddevice as _sd
+
+                    device = getattr(self, "_beep_device", None)
+                    try:
+                        info = _sd.query_devices(device, kind="output")
+                        rate = int(info.get("default_samplerate", 16000))
+                    except Exception:
+                        rate = 16000
+
+                    dur = 0.15
+                    samples = int(round(dur * rate))
+                    if samples > 0:
+                        t = np.arange(samples, dtype=np.float32) / float(rate)
+                        tone1 = (0.3 * np.sin(2.0 * np.pi * 800.0 * t)).astype(np.float32)
+                        tone2 = (0.3 * np.sin(2.0 * np.pi * 1600.0 * t)).astype(np.float32)
+                        wave = np.concatenate((tone1, tone2))
+                        try:
+                            _sd.play(wave, samplerate=rate, device=device, blocking=False)
+                        except Exception as _exc:
+                            log.warning("Ack beep playback failed: %s", _exc)
+                except Exception:
+                    log.debug("sounddevice not available for ack beep")
                 try:
                     self._on_transcript(transcript)
                 except Exception as exc:
                     log.error("on_transcript raised: %s", exc)
             else:
                 log.info("No command recognised (transcript=%r)", transcript)
+                # Play a short timeout tone one octave down (half frequency)
+                try:
+                    import sounddevice as _sd
+
+                    device = getattr(self, "_beep_device", None)
+                    base_freq = float(getattr(self, "_beep_freq", 800))
+                    freq = max(20.0, base_freq / 2.0)
+                    duration = float(getattr(self, "_beep_duration_s", 0.5))
+
+                    # Query output device default samplerate and fall back
+                    # to 16000 Hz.
+                    try:
+                        info = _sd.query_devices(device, kind="output")
+                        rate = int(info.get("default_samplerate", 16000))
+                    except Exception:
+                        rate = 16000
+
+                    samples = int(round(duration * rate))
+                    if samples > 0:
+                        t = np.arange(samples, dtype=np.float32) / float(rate)
+                        wave = (0.3 * np.sin(2.0 * np.pi * float(freq) * t)).astype(
+                            np.float32
+                        )
+                        try:
+                            _sd.play(wave, samplerate=rate, device=device, blocking=False)
+                        except Exception as _exc:
+                            log.warning("Timeout beep playback failed: %s", _exc)
+                except Exception:
+                    log.debug("sounddevice not available for timeout beep")
 
         log.debug("STT thread stopped")

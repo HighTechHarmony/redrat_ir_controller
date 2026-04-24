@@ -159,9 +159,37 @@ def main() -> None:
         log_scores=debug_wake,
         log_every=wake_log_every,
     )
+    # Enable a short beep on wake using the configured ALSA device (if present)
+    try:
+        detector = WakeWordDetector(
+            model_name=voice_cfg.get("wake_word_model", "hey_jarvis_v0.1"),
+            audio_queue=audio.queue,
+            threshold=float(voice_cfg.get("wake_word_threshold", 0.5)),
+            log_scores=debug_wake,
+            log_every=wake_log_every,
+            beep_on_wake=bool(voice_cfg.get("beep_on_wake", True)),
+            beep_device=voice_cfg.get("alsa_device", None),
+            beep_freq=int(voice_cfg.get("beep_freq_hz", 800)),
+            beep_duration_s=float(voice_cfg.get("beep_duration_s", 0.5)),
+        )
+    except TypeError:
+        # Fallback for older installs: construct without beep args
+        detector = WakeWordDetector(
+            model_name=voice_cfg.get("wake_word_model", "hey_jarvis_v0.1"),
+            audio_queue=audio.queue,
+            threshold=float(voice_cfg.get("wake_word_threshold", 0.5)),
+            log_scores=debug_wake,
+            log_every=wake_log_every,
+        )
 
     # Wire the wake event from the detector into the recognizer
     recognizer._wake_event = detector.wake_event
+    # Wire listening_event so STT can suppress wake beep while active
+    recognizer._listening_event = detector.listening_event
+    # Provide recognizer with beep playback settings for timeout tone.
+    recognizer._beep_device = voice_cfg.get("alsa_device", None)
+    recognizer._beep_freq = int(voice_cfg.get("beep_freq_hz", 800))
+    recognizer._beep_duration_s = float(voice_cfg.get("beep_duration_s", 0.5))
     # Expose recognizer status to the API
     voice_status = recognizer.status
 
