@@ -598,7 +598,7 @@ def _home_html() -> str:
             <td class="mono">${{cmd.phrase}}</td>
             <td class="mono">${{cmd.macro}}</td>
             <td>
-              <button onclick="vcStartEdit('${{cmd.id}}','${{cmd.phrase.replace(/'/g,"\\'")}}',${{JSON.stringify(cmd.macro)}})">Edit</button>
+              <button onclick="vcStartEdit('${{cmd.id}}','${{cmd.phrase.replace(/'/g,"\\'")}}',${{JSON.stringify(cmd.macro).replace(/"/g,"&quot;")}})">Edit</button>
               <button onclick="vcDelete('${{cmd.id}}')">Delete</button>
             </td>`;
           tbody.appendChild(tr);
@@ -616,6 +616,14 @@ def _home_html() -> str:
           tr.classList.toggle("vc-edit-row", tr.dataset.id === id);
         }});
         $("vc-phrase").focus();
+        // Also load the associated macro into the Macro Builder panel
+        if (macro && lastMacros[macro]) {{
+          $("macro-name").value = macro;
+          macroSteps.length = 0;
+          lastMacros[macro].forEach(s => macroSteps.push({{...s}}));
+          renderSteps();
+          show("macro-build-result", `Loaded '${{macro}}' into builder (from voice command edit).`);
+        }}
       }}
 
       function vcCancelEdit() {{

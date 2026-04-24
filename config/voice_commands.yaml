@@ -4,12 +4,6 @@
 - id: a1b2c3d4-0002-0000-0000-000000000002
   macro: receiver_on
   phrase: turn on the receiver
-- id: a1b2c3d4-0003-0000-0000-000000000003
-  macro: home_theater_on
-  phrase: home theater on
-- id: a1b2c3d4-0004-0000-0000-000000000004
-  macro: home_theater_off
-  phrase: home theater off
 - id: a1b2c3d4-0004-0000-0000-000000000005
   macro: TestIR
   phrase: ir test
