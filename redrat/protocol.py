@@ -95,6 +95,12 @@ RR3_CARRIER_FREQ_BASE = 6_000_000   # used in mod_freq_count formula
 _HEADER_FMT = ">HHIHHBBHHBxxx"   # 3 pad bytes to align to 4-byte boundary
 _HEADER_SIZE = struct.calcsize(_HEADER_FMT)   # 22 bytes
 
+# The device sends compact (variable-length) packets without the 3 padding
+# bytes and with only max_lengths lens slots and sig_size sigdata bytes.
+# Use this format when decoding received (learning) packets.
+_HEADER_FMT_RX = ">HHIHHBBHHB"   # no padding, 19 bytes
+_HEADER_SIZE_RX = struct.calcsize(_HEADER_FMT_RX)   # 19 bytes
+
 _LENS_FMT = ">255H"   # 510 bytes
 _LENS_SIZE = struct.calcsize(_LENS_FMT)
 
@@ -234,11 +240,16 @@ def decode_irdata(data: bytes) -> IrData:
     Decode a raw redrat3_irdata packet received from the wideband (learning)
     endpoint into an IrData.
 
+    The device sends compact variable-length packets: no 3-byte header padding,
+    a lens[] table of max_lengths entries (not the full 255), and exactly
+    sig_size bytes of sigdata (not the full 512).  The full 1044-byte static
+    layout is only used for TX (encode_irdata).
+
     Raises ValueError on malformed packets.
     """
-    if len(data) < IRDATA_PACKET_SIZE:
+    if len(data) < _HEADER_SIZE_RX:
         raise ValueError(
-            f"Packet too short: {len(data)} < {IRDATA_PACKET_SIZE} bytes"
+            f"Packet too short for header: {len(data)} < {_HEADER_SIZE_RX} bytes"
         )
 
     (
@@ -247,12 +258,12 @@ def decode_irdata(data: bytes) -> IrData:
         pause_ticks,
         mod_freq_count,
         num_periods,
-        _max_lengths,
+        max_lengths,
         no_lengths,
         _max_sig_size,
         sig_size,
         no_repeats,
-    ) = struct.unpack_from(_HEADER_FMT, data, 0)
+    ) = struct.unpack_from(_HEADER_FMT_RX, data, 0)
 
     if transfer_type != RR3_MOD_SIGNAL_IN:
         raise ValueError(
@@ -260,14 +271,36 @@ def decode_irdata(data: bytes) -> IrData:
             f"(expected 0x{RR3_MOD_SIGNAL_IN:04X})"
         )
 
-    lens_raw = struct.unpack_from(_LENS_FMT, data, _HEADER_SIZE)
-    sigdata_raw = data[_HEADER_SIZE + _LENS_SIZE: _HEADER_SIZE + _LENS_SIZE + _SIGDATA_SIZE]
+    # Detect whether this is a full TX-format packet (1044 bytes with 3 padding
+    # bytes after the 19-byte common header and a 255-slot lens table) or a compact
+    # RX packet from the device (no padding, max_lengths-slot lens table).
+    if len(data) >= IRDATA_PACKET_SIZE:
+        # Full TX-format: 3 padding bytes push lens[] to offset _HEADER_SIZE (22)
+        lens_slot_count = RR3_MAX_LENGTHS
+        lens_fmt = _LENS_FMT
+        lens_offset = _HEADER_SIZE
+    else:
+        # Compact RX packet: no padding, variable lens table
+        lens_slot_count = max_lengths if max_lengths else RR3_MAX_LENGTHS
+        lens_fmt = f">{lens_slot_count}H"
+        lens_offset = _HEADER_SIZE_RX
+
+    sigdata_offset = lens_offset + 2 * lens_slot_count
+    min_size = sigdata_offset + sig_size
+    if len(data) < min_size:
+        raise ValueError(
+            f"Packet too short for payload: {len(data)} < {min_size} bytes "
+            f"(max_lengths={max_lengths}, sig_size={sig_size})"
+        )
+
+    lens_raw = struct.unpack_from(lens_fmt, data, lens_offset)
+    sigdata_raw = data[sigdata_offset: sigdata_offset + sig_size]
 
     lens_table = lens_raw[:no_lengths]
 
     # Read sigdata up to the end-of-signal marker or sig_size
     timings_ticks: list[int] = []
-    for i in range(min(sig_size, _SIGDATA_SIZE)):
+    for i in range(sig_size):
         idx = sigdata_raw[i]
         if idx == RR3_END_OF_SIGNAL:
             break
@@ -278,7 +311,17 @@ def decode_irdata(data: bytes) -> IrData:
         timings_ticks.append(lens_table[idx])
 
     timings_us = [rr3_to_us(t) for t in timings_ticks]
-    carrier_hz = mod_freq_count_to_carrier(mod_freq_count, num_periods)
+
+    # Carrier frequency encoding differs by format:
+    # - Full TX packet: mod_freq_count = 65536 - (6 MHz / carrier_hz), num_periods=1
+    # - Compact RX packet: mod_freq_count = RR3_CLOCK_HZ (2 MHz) ticks for num_periods cycles
+    if len(data) >= IRDATA_PACKET_SIZE:
+        carrier_hz = mod_freq_count_to_carrier(mod_freq_count, num_periods)
+    elif mod_freq_count > 0 and num_periods > 0:
+        carrier_hz = (num_periods * RR3_CLOCK_HZ) // mod_freq_count
+    else:
+        carrier_hz = RR3_DEFAULT_CARRIER_HZ
+
     pause_us = rr3_to_us(pause_ticks)
 
     return IrData(

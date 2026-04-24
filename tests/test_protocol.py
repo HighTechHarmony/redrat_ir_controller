@@ -205,8 +205,9 @@ class TestRoundTrip:
 
 class TestDecoder:
     def test_short_packet_raises(self):
+        # 10 bytes is below the 19-byte compact RX header minimum
         with pytest.raises(ValueError, match="too short"):
-            decode_irdata(b"\x00" * 100)
+            decode_irdata(b"\x00" * 10)
 
     def test_wrong_transfer_type_raises(self):
         ir = IrData(carrier_hz=38_000, timings_us=NEC_TIMINGS)
