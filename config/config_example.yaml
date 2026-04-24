@@ -18,7 +18,7 @@ voice:
   # ALSA device name as shown by `arecord -L` or `python -m sounddevice`.
   # Use "" or "default" for the system default device.
   # alsa_device: "default"
-  alsa_device: "hw:4,0"
+  alsa_device: "hw:3,0"
 
   # openWakeWord model name (built-in) or path to a custom .onnx/.tflite file.
   # Built-in options usually include version suffixes like "hey_jarvis_v0.1".

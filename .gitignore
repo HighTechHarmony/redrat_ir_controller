@@ -88,3 +88,7 @@ node_modules/
 .coverage
 coverage.xml
 htmlcov/
+
+# Don't clobber config files
+config.yaml
+
