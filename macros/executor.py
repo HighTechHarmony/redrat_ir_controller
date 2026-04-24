@@ -25,6 +25,7 @@ from redrat.store import SignalStore, SignalNotFoundError
 log = logging.getLogger(__name__)
 
 VIRTUAL_DELAY_1S = "__delay_1s__"
+VIRTUAL_DELAY_10S = "__delay_10s__"
 
 
 class MacroNotFoundError(KeyError):
@@ -109,7 +110,7 @@ class MacroExecutor:
 
             if signal is not None:
                 signal = str(signal).strip()
-                if signal != VIRTUAL_DELAY_1S:
+                if signal != VIRTUAL_DELAY_1S and signal != VIRTUAL_DELAY_10S:
                     if not signal:
                         raise ValueError(f"Macro step {i} has an empty signal name")
                     if signal not in self._store.list_names():
@@ -160,10 +161,17 @@ class MacroExecutor:
             signal_name = step.get("signal")
             delay_ms = int(step.get("delay_ms", 0))
 
-            # Virtual 1-second delay signal, useful as a step in macro editors.
+            # Virtual delay tokens, useful as steps in macro editors.
             if signal_name == VIRTUAL_DELAY_1S:
                 log.debug("Step %d: virtual delay 1000ms", i)
                 time.sleep(1.0)
+                if delay_ms > 0:
+                    time.sleep(delay_ms / 1000.0)
+                continue
+
+            if signal_name == VIRTUAL_DELAY_10S:
+                log.debug("Step %d: virtual delay 10000ms", i)
+                time.sleep(10.0)
                 if delay_ms > 0:
                     time.sleep(delay_ms / 1000.0)
                 continue

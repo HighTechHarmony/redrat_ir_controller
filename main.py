@@ -73,19 +73,34 @@ def main() -> None:
     # ---------------------------------------------------------------
     # RedRat3 device
     # ---------------------------------------------------------------
-    from redrat.device import RedRatDevice, RedRatError
+    backend = redrat_cfg.get("backend", "usb").lower()
 
-    serial = redrat_cfg.get("serial_number") or None
-    try:
-        device = RedRatDevice.open_first(serial_number=serial)
-        log.info(
-            "Connected to RedRat3: serial=%s firmware=%s",
-            device.get_serial_number(),
-            device.get_firmware_version(),
-        )
-    except RedRatError as exc:
-        log.error("Could not open RedRat3: %s", exc)
-        sys.exit(1)
+    if backend == "lirc":
+        from redrat.lirc_device import LircDevice, LircError as _DeviceError
+        lirc_path = redrat_cfg.get("lirc_path", "/dev/lirc0")
+        try:
+            device = LircDevice.open_first(path=lirc_path)
+            log.info(
+                "Connected to LIRC device: %s firmware=%s",
+                device.get_serial_number(),
+                device.get_firmware_version(),
+            )
+        except LircError as exc:
+            log.error("Could not open LIRC device %s: %s", lirc_path, exc)
+            sys.exit(1)
+    else:
+        from redrat.device import RedRatDevice, RedRatError as _DeviceError
+        serial = redrat_cfg.get("serial_number") or None
+        try:
+            device = RedRatDevice.open_first(serial_number=serial)
+            log.info(
+                "Connected to RedRat3: serial=%s firmware=%s",
+                device.get_serial_number(),
+                device.get_firmware_version(),
+            )
+        except RedRatError as exc:
+            log.error("Could not open RedRat3: %s", exc)
+            sys.exit(1)
 
     # ---------------------------------------------------------------
     # Stores & executor

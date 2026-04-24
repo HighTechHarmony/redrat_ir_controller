@@ -30,3 +30,16 @@ projector_on:
 receiver_on:
 - delay_ms: 2000
   signal: receiver_power
+screen_down:
+- signal: screen_down
+- signal: __delay_10s__
+- signal: __delay_10s__
+- signal: __delay_10s__
+- signal: __delay_1s__
+- signal: __delay_1s__
+- signal: __delay_1s__
+- signal: __delay_1s__
+- signal: __delay_1s__
+- signal: screen_stop
+screen_up:
+- signal: screen_up

@@ -11,15 +11,16 @@ import time
 
 from flask import Blueprint, Flask, jsonify, request
 
-from macros.executor import MacroExecutor, MacroNotFoundError, VIRTUAL_DELAY_1S
+from macros.executor import MacroExecutor, MacroNotFoundError, VIRTUAL_DELAY_1S, VIRTUAL_DELAY_10S
 from redrat.device import RedRatDevice, RedRatError
+from redrat.lirc_device import LircDevice, LircError
 from redrat.store import SignalNotFoundError, SignalStore
 from voice.store import VoiceCommandNotFoundError, VoiceCommandStore
 
 log = logging.getLogger(__name__)
 
 # Module-level singletons injected by main.py via create_app()
-_device: RedRatDevice | None = None
+_device: RedRatDevice | LircDevice | None = None
 _signal_store: SignalStore | None = None
 _macro_executor: MacroExecutor | None = None
 _voice_store: VoiceCommandStore | None = None
@@ -37,7 +38,7 @@ def _ok(data=None, status: int = 200):
 
 
 def create_app(
-    device: RedRatDevice,
+    device: RedRatDevice | LircDevice,
     signal_store: SignalStore,
     macro_executor: MacroExecutor,
     voice_store: VoiceCommandStore,
@@ -142,7 +143,7 @@ def learn_signal():
 
     try:
         ir = _device.learn(timeout_s=timeout_s)
-    except RedRatError as exc:
+    except (RedRatError, LircError) as exc:
         return _err(str(exc), 504)
 
     try:
@@ -170,7 +171,7 @@ def send_signal():
 
     try:
         _device.send(ir)
-    except RedRatError as exc:
+    except (RedRatError, LircError) as exc:
         return _err(str(exc), 502)
 
     return _ok({"sent": name})
@@ -200,7 +201,7 @@ def send_signal_burst():
     while time.monotonic() < deadline:
         try:
             _device.send(ir)
-        except RedRatError as exc:
+        except (RedRatError, LircError) as exc:
             return _err(f"Burst stopped after {sent_count} sends: {exc}", 502)
         sent_count += 1
         time.sleep(interval_ms / 1000.0)
@@ -366,7 +367,7 @@ def _home_html() -> str:
   </head>
   <body>
     <h1>RedRat Control Panel</h1>
-    <p class="hint">Learn signals, send/test IR, create macros (with virtual 1-second delay), and run playback.</p>
+    <p class="hint">Learn signals, send/test IR, create macros (with virtual 1s and 10s delay steps), and run playback.</p>
 
     <div class="grid">
       <div class="panel">
@@ -393,7 +394,11 @@ def _home_html() -> str:
         <h2>Macro Builder</h2>
         <div class="row"><label>Macro Name</label><input id="macro-name" type="text" value="new_macro"/></div>
         <div class="row"><label>Signal Step</label><select id="macro-signal-select"></select><button id="btn-add-step">Add Step</button></div>
-        <div class="row"><button id="btn-add-delay">Add 1s Delay Step</button><span class="hint mono">{VIRTUAL_DELAY_1S}</span></div>
+        <div class="row">
+          <button id="btn-add-delay">Add 1s Delay Step</button>
+          <button id="btn-add-delay10">Add 10s Delay Step</button>
+          <span class="hint mono">{VIRTUAL_DELAY_1S} {VIRTUAL_DELAY_10S}</span>
+        </div>
         <ul id="macro-steps"></ul>
         <div class="row"><button id="btn-save-macro">Save Macro</button></div>
         <div id="macro-build-result" class="hint"></div>
@@ -434,6 +439,7 @@ def _home_html() -> str:
 
     <script>
       const delayToken = {json.dumps(VIRTUAL_DELAY_1S)};
+      const delay10Token = {json.dumps(VIRTUAL_DELAY_10S)};
       const macroSteps = [];
       let lastMacros = {{}};
       const $ = (id) => document.getElementById(id);
@@ -452,7 +458,7 @@ def _home_html() -> str:
         ul.innerHTML = "";
         macroSteps.forEach((s, idx) => {{
           const li = document.createElement("li");
-          const txt = s.signal === delayToken ? "[delay 1s]" : s.signal;
+          const txt = s.signal === delayToken ? "[delay 1s]" : (s.signal === delay10Token ? "[delay 10s]" : s.signal);
           li.textContent = txt + (s.delay_ms ? ` (+${{s.delay_ms}}ms)` : "");
           const b = document.createElement("button");
           b.textContent = "Remove";
@@ -538,6 +544,11 @@ def _home_html() -> str:
 
       $("btn-add-delay").onclick = () => {{
         macroSteps.push({{signal:delayToken}});
+        renderSteps();
+      }};
+
+      $("btn-add-delay10").onclick = () => {{
+        macroSteps.push({{signal:delay10Token}});
         renderSteps();
       }};
 
