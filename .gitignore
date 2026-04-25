@@ -90,9 +90,9 @@ coverage.xml
 htmlcov/
 
 # Don't clobber config files
-/config/config.yaml
-/config/ir_codes.yaml
-/config/macros.yaml
-/config/voice_commands.yaml
+config/config.yaml
+config/ir_codes.yaml
+config/macros.yaml
+config/voice_commands.yaml
 
 
