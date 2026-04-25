@@ -1,0 +1,18 @@
+- id: a1b2c3d4-0002-0000-0000-000000000002
+  macro: receiver_on
+  phrase: turn on the receiver
+- id: a1b2c3d4-0004-0000-0000-000000000005
+  macro: TestIR
+  phrase: ir test
+- id: db7d3a22-b617-4a5a-8ae2-bbadf286f442
+  macro: projector_off
+  phrase: turn off the projector
+- id: 1a9040fa-7a1e-458c-996c-d3b914567e55
+  macro: screen_up
+  phrase: roll up screen
+- id: 5a3a1014-14ad-497d-b0c3-4b465d1514c8
+  macro: screen_down
+  phrase: roll screen down
+- id: 77c45aab-6d28-4c2d-ada6-d9bdb9984bea
+  macro: projector_on
+  phrase: turn on the projector
