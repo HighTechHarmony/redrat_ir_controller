@@ -9,16 +9,11 @@ import logging
 import threading
 import time
 
-from flask import Blueprint, Flask, jsonify, request
+import yaml
+from flask import Blueprint, Flask, Response, jsonify, request
 
 from macros.executor import MacroExecutor, MacroNotFoundError, VIRTUAL_DELAY_1S, VIRTUAL_DELAY_10S
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-  from redrat.device import RedRatDevice, RedRatError
-  from redrat.lirc_device import LircDevice, LircError
-else:
-  from redrat.lirc_device import LircDevice, LircError
+from redrat.lirc_device import LircDevice, LircError
 
 from redrat.store import SignalNotFoundError, SignalStore
 from voice.store import VoiceCommandNotFoundError, VoiceCommandStore
@@ -44,7 +39,7 @@ def _ok(data=None, status: int = 200):
 
 
 def create_app(
-    device: RedRatDevice | LircDevice,
+    device: LircDevice,
     signal_store: SignalStore,
     macro_executor: MacroExecutor,
     voice_store: VoiceCommandStore,
@@ -84,12 +79,16 @@ def api_index():
                     "POST /api/signals/send",
                     "POST /api/signals/send-burst",
                     "DELETE /api/signals/<name>",
+                    "GET /api/signals/export",
+                    "POST /api/signals/import",
                 ],
                 "macros": [
                     "GET /api/macros",
                     "POST /api/macros",
                     "POST /api/macros/run",
                     "DELETE /api/macros/<name>",
+                    "GET /api/macros/export",
+                    "POST /api/macros/import",
                 ],
                 "voice": [
                     "GET /api/voice/status",
@@ -97,6 +96,8 @@ def api_index():
                     "POST /api/voice/commands",
                     "PUT /api/voice/commands/<id>",
                     "DELETE /api/voice/commands/<id>",
+                    "GET /api/voice/commands/export",
+                    "POST /api/voice/commands/import",
                 ],
             },
         }
@@ -106,10 +107,10 @@ def api_index():
 @_bp.route("/devices", methods=["GET"])
 def list_devices():
     try:
-        devices = RedRatDevice.enumerate()
+        devices = LircDevice.enumerate()
         return _ok([d.info() for d in devices])
     except Exception as exc:
-        log.exception("Error enumerating devices")
+        log.exception("Error enumerating LIRC devices")
         return _err(str(exc), 500)
 
 
@@ -134,6 +135,29 @@ def list_signals():
     return _ok(_signal_store.list_names())
 
 
+def _get_learning_device() -> tuple[LircDevice, bool]:
+    """Return a device that supports MODE2 receive and whether the caller must close it."""
+    try:
+        if isinstance(_device, LircDevice) and _device.info().get("can_receive"):
+            return _device, False
+    except Exception:
+        pass
+
+    for device in LircDevice.enumerate():
+        try:
+            if device.info().get("can_receive"):
+                return device, True
+        except Exception:
+            pass
+        device.close()
+
+    raise LircError(
+        "No LIRC device with MODE2 receive support was found. "
+      "This RedRat3 may not be responding; try unplugging and replugging "
+      "the device, then retry learning."
+    )
+
+
 @_bp.route("/signals/learn", methods=["GET", "POST"])
 def learn_signal():
     if request.method == "GET":
@@ -147,10 +171,16 @@ def learn_signal():
     if not (1.0 <= timeout_s <= 60.0):
         return _err("'timeout_s' must be between 1 and 60")
 
+    learn_device = None
+    should_close = False
     try:
-        ir = _device.learn(timeout_s=timeout_s)
-    except (RedRatError, LircError) as exc:
-        return _err(str(exc), 504)
+        learn_device, should_close = _get_learning_device()
+        ir = learn_device.learn(timeout_s=timeout_s)
+    except LircError as exc:
+        return _err(str(exc), 504 if "timeout" in str(exc).lower() else 501)
+    finally:
+        if learn_device is not None and should_close:
+            learn_device.close()
 
     try:
         _signal_store.save_signal(name, ir)
@@ -177,7 +207,7 @@ def send_signal():
 
     try:
         _device.send(ir)
-    except (RedRatError, LircError) as exc:
+    except LircError as exc:
         return _err(str(exc), 502)
 
     return _ok({"sent": name})
@@ -205,12 +235,12 @@ def send_signal_burst():
     deadline = time.monotonic() + duration_s
     sent_count = 0
     while time.monotonic() < deadline:
-        try:
-            _device.send(ir)
-        except (RedRatError, LircError) as exc:
-            return _err(f"Burst stopped after {sent_count} sends: {exc}", 502)
-        sent_count += 1
-        time.sleep(interval_ms / 1000.0)
+      try:
+        _device.send(ir)
+      except LircError as exc:
+        return _err(f"Burst stopped after {sent_count} sends: {exc}", 502)
+      sent_count += 1
+      time.sleep(interval_ms / 1000.0)
 
     return _ok(
         {
@@ -229,6 +259,43 @@ def delete_signal(name: str):
     except SignalNotFoundError:
         return _err(f"Signal {name!r} not found", 404)
     return _ok()
+
+
+@_bp.route("/signals/export", methods=["GET"])
+def export_signals():
+    path = _signal_store._path
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        return _err(f"Could not read signal store: {exc}", 500)
+    return Response(
+        content,
+        mimetype="application/x-yaml",
+        headers={"Content-Disposition": f"attachment; filename=ir_codes.yaml"},
+    )
+
+
+@_bp.route("/signals/import", methods=["POST"])
+def import_signals():
+    if "file" not in request.files:
+        return _err("'file' field is required")
+    uploaded = request.files["file"]
+    try:
+        data = yaml.safe_load(uploaded.stream)
+    except yaml.YAMLError as exc:
+        return _err(f"Invalid YAML: {exc}")
+    if not isinstance(data, dict):
+        return _err("IR codes file must be a YAML mapping (signal_name: ...)")
+    path = _signal_store._path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".yaml.tmp")
+    try:
+        tmp.write_text(yaml.safe_dump(data, default_flow_style=False, allow_unicode=True), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        return _err(f"Could not write signal store: {exc}", 500)
+    _signal_store.reload()
+    return _ok({"imported": len(data)})
 
 
 @_bp.route("/macros", methods=["GET"])
@@ -251,7 +318,20 @@ def save_macro():
     except ValueError as exc:
         return _err(str(exc), 400)
 
-    return _ok({"saved": name}, 201)
+    # Auto-create a voice command when a brand-new macro is saved.
+    voice_command_created = None
+    if _voice_store is not None:
+        already_mapped = any(
+            c.get("macro") == name for c in _voice_store.list_commands()
+        )
+        if not already_mapped:
+            phrase = name.replace("_", " ").replace("-", " ").strip()
+            try:
+                voice_command_created = _voice_store.add(phrase=phrase, macro=name)
+            except Exception as exc:
+                log.warning("Could not auto-create voice command for macro %r: %s", name, exc)
+
+    return _ok({"saved": name, "voice_command_created": voice_command_created}, 201)
 
 
 @_bp.route("/macros/<name>", methods=["DELETE"])
@@ -261,6 +341,43 @@ def delete_macro(name: str):
     except MacroNotFoundError:
         return _err(f"Macro {name!r} not found", 404)
     return _ok()
+
+
+@_bp.route("/macros/export", methods=["GET"])
+def export_macros():
+    path = _macro_executor._path
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        return _err(f"Could not read macro store: {exc}", 500)
+    return Response(
+        content,
+        mimetype="application/x-yaml",
+        headers={"Content-Disposition": "attachment; filename=macros.yaml"},
+    )
+
+
+@_bp.route("/macros/import", methods=["POST"])
+def import_macros():
+    if "file" not in request.files:
+        return _err("'file' field is required")
+    uploaded = request.files["file"]
+    try:
+        data = yaml.safe_load(uploaded.stream)
+    except yaml.YAMLError as exc:
+        return _err(f"Invalid YAML: {exc}")
+    if not isinstance(data, dict):
+        return _err("Macros file must be a YAML mapping (macro_name: [steps])")
+    path = _macro_executor._path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".yaml.tmp")
+    try:
+        tmp.write_text(yaml.safe_dump(data, default_flow_style=False, allow_unicode=True), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        return _err(f"Could not write macro store: {exc}", 500)
+    _macro_executor.reload()
+    return _ok({"imported": len(data)})
 
 
 @_bp.route("/macros/run", methods=["POST"])
@@ -341,6 +458,43 @@ def delete_voice_command(command_id: str):
     except VoiceCommandNotFoundError:
         return _err(f"Voice command {command_id!r} not found", 404)
     return _ok()
+
+
+@_bp.route("/voice/commands/export", methods=["GET"])
+def export_voice_commands():
+    path = _voice_store._path
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        return _err(f"Could not read voice command store: {exc}", 500)
+    return Response(
+        content,
+        mimetype="application/x-yaml",
+        headers={"Content-Disposition": "attachment; filename=voice_commands.yaml"},
+    )
+
+
+@_bp.route("/voice/commands/import", methods=["POST"])
+def import_voice_commands():
+    if "file" not in request.files:
+        return _err("'file' field is required")
+    uploaded = request.files["file"]
+    try:
+        data = yaml.safe_load(uploaded.stream)
+    except yaml.YAMLError as exc:
+        return _err(f"Invalid YAML: {exc}")
+    if not isinstance(data, list):
+        return _err("Voice commands file must be a YAML sequence (list of entries)")
+    path = _voice_store._path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".yaml.tmp")
+    try:
+        tmp.write_text(yaml.safe_dump(data, default_flow_style=False, allow_unicode=True), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        return _err(f"Could not write voice command store: {exc}", 500)
+    _voice_store.reload()
+    return _ok({"imported": len(data)})
 
 
 def _home_html() -> str:
@@ -434,6 +588,31 @@ def _home_html() -> str:
       <table class="vc-table" id="vc-table">
         <thead><tr><th>Phrase</th><th>Macro</th><th style="width:120px;"></th></tr></thead>
         <tbody id="vc-tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="panel" style="margin-top:0.9rem;">
+      <h2>Export / Import</h2>
+      <p class="hint">Download a YAML file to back up your data, or upload a previously saved file to restore it. Import <strong>replaces</strong> the current data.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:0.93rem;">
+        <thead><tr><th style="text-align:left;padding:0.3rem 0.5rem;border-bottom:2px solid #ddd;">Dataset</th><th style="text-align:left;padding:0.3rem 0.5rem;border-bottom:2px solid #ddd;">Export</th><th style="text-align:left;padding:0.3rem 0.5rem;border-bottom:2px solid #ddd;">Import</th></tr></thead>
+        <tbody>
+          <tr>
+            <td style="padding:0.35rem 0.5rem;">IR Signals</td>
+            <td style="padding:0.35rem 0.5rem;"><a href="/api/signals/export" download="ir_codes.yaml"><button type="button">Download</button></a></td>
+            <td style="padding:0.35rem 0.5rem;"><input type="file" id="imp-signals-file" accept=".yaml,.yml" style="max-width:200px;"/><button type="button" id="btn-imp-signals">Upload</button> <span id="imp-signals-result" class="hint"></span></td>
+          </tr>
+          <tr>
+            <td style="padding:0.35rem 0.5rem;">Macros</td>
+            <td style="padding:0.35rem 0.5rem;"><a href="/api/macros/export" download="macros.yaml"><button type="button">Download</button></a></td>
+            <td style="padding:0.35rem 0.5rem;"><input type="file" id="imp-macros-file" accept=".yaml,.yml" style="max-width:200px;"/><button type="button" id="btn-imp-macros">Upload</button> <span id="imp-macros-result" class="hint"></span></td>
+          </tr>
+          <tr>
+            <td style="padding:0.35rem 0.5rem;">Voice Commands</td>
+            <td style="padding:0.35rem 0.5rem;"><a href="/api/voice/commands/export" download="voice_commands.yaml"><button type="button">Download</button></a></td>
+            <td style="padding:0.35rem 0.5rem;"><input type="file" id="imp-vc-file" accept=".yaml,.yml" style="max-width:200px;"/><button type="button" id="btn-imp-vc">Upload</button> <span id="imp-vc-result" class="hint"></span></td>
+          </tr>
+        </tbody>
       </table>
     </div>
 
@@ -688,6 +867,27 @@ def _home_html() -> str:
           await refreshVoiceCommands();
         }} catch(e) {{ show("vc-result", `Error: ${{e.message}}`); }}
       }};
+
+      // ── Export / Import ───────────────────────────────────────────────
+      async function importYaml(fileInputId, resultId, endpoint, refreshFn) {{
+        const file = $(fileInputId).files[0];
+        if (!file) {{ show(resultId, "Please select a file first."); return; }}
+        const fd = new FormData();
+        fd.append("file", file);
+        try {{
+          show(resultId, "Uploading...");
+          const resp = await fetch(endpoint, {{ method: "POST", body: fd }});
+          const data = await resp.json().catch(() => ({{}}));
+          if (!resp.ok) throw new Error(data.error || `HTTP ${{resp.status}}`);
+          show(resultId, `Imported ${{data.imported}} item(s). ✓`);
+          $(fileInputId).value = "";
+          if (refreshFn) await refreshFn();
+        }} catch (e) {{ show(resultId, `Error: ${{e.message}}`); }}
+      }}
+
+      $("btn-imp-signals").onclick = () => importYaml("imp-signals-file", "imp-signals-result", "/api/signals/import", refreshSignals);
+      $("btn-imp-macros").onclick  = () => importYaml("imp-macros-file",  "imp-macros-result",  "/api/macros/import",  refreshMacros);
+      $("btn-imp-vc").onclick      = () => importYaml("imp-vc-file",      "imp-vc-result",      "/api/voice/commands/import", refreshVoiceCommands);
 
       (async function init() {{
         try {{

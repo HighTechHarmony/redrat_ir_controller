@@ -164,6 +164,14 @@ class VoiceCommandStore:
         with self._lock:
             return {c["phrase"]: c["macro"] for c in self._commands if c.get("phrase") and c.get("macro")}
 
+    def reload(self) -> None:
+        """Reload voice commands from disk, replacing the in-memory state."""
+        with self._lock:
+            self._commands = []
+            self._load()
+        self._signal_rebuild()
+        log.info("Voice command store reloaded from %s", self._path)
+
 
 # ---------------------------------------------------------------------------
 # Validation helpers

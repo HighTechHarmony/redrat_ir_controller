@@ -1,5 +1,4 @@
 # Core
-pyusb>=1.2.1
 PyYAML>=6.0
 flask>=3.0
 

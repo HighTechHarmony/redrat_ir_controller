@@ -125,3 +125,10 @@ class SignalStore:
         """Return a copy of the raw signal dictionary (for serialisation)."""
         with self._lock:
             return dict(self._signals)
+
+    def reload(self) -> None:
+        """Reload signals from disk, replacing the in-memory state."""
+        with self._lock:
+            self._signals = {}
+            self._load()
+        log.info("Signal store reloaded from %s", self._path)

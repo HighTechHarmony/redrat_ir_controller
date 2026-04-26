@@ -2,7 +2,7 @@
 RedRat IR Controller — entry point.
 
 Starts the Flask web API in a daemon thread and runs the voice command
-pipeline in the main thread.  Both share the same RedRatDevice,
+pipeline in the main thread.  Both share the same LircDevice,
 SignalStore, MacroExecutor, and VoiceCommandStore instances.
 
 Usage:
@@ -71,36 +71,21 @@ def main() -> None:
     redrat_cfg = cfg.get("redrat", {})
 
     # ---------------------------------------------------------------
-    # RedRat3 device
+    # RedRat3 device (LIRC kernel driver)
     # ---------------------------------------------------------------
-    backend = redrat_cfg.get("backend", "usb").lower()
+    from redrat.lirc_device import LircDevice, LircError
 
-    if backend == "lirc":
-        from redrat.lirc_device import LircDevice, LircError as _DeviceError
-        lirc_path = redrat_cfg.get("lirc_path", "/dev/lirc0")
-        try:
-            device = LircDevice.open_first(path=lirc_path)
-            log.info(
-                "Connected to LIRC device: %s firmware=%s",
-                device.get_serial_number(),
-                device.get_firmware_version(),
-            )
-        except LircError as exc:
-            log.error("Could not open LIRC device %s: %s", lirc_path, exc)
-            sys.exit(1)
-    else:
-        from redrat.device import RedRatDevice, RedRatError as _DeviceError
-        serial = redrat_cfg.get("serial_number") or None
-        try:
-            device = RedRatDevice.open_first(serial_number=serial)
-            log.info(
-                "Connected to RedRat3: serial=%s firmware=%s",
-                device.get_serial_number(),
-                device.get_firmware_version(),
-            )
-        except RedRatError as exc:
-            log.error("Could not open RedRat3: %s", exc)
-            sys.exit(1)
+    lirc_path = redrat_cfg.get("lirc_path", "/dev/lirc0")
+    try:
+        device = LircDevice.open_first(path=lirc_path)
+        log.info(
+            "Connected to LIRC device: %s firmware=%s",
+            device.get_serial_number(),
+            device.get_firmware_version(),
+        )
+    except LircError as exc:
+        log.error("Could not open LIRC device %s: %s", lirc_path, exc)
+        sys.exit(1)
 
     # ---------------------------------------------------------------
     # Stores & executor
@@ -173,36 +158,18 @@ def main() -> None:
         threshold=float(voice_cfg.get("wake_word_threshold", 0.5)),
         log_scores=debug_wake,
         log_every=wake_log_every,
+        beep_on_wake=bool(voice_cfg.get("beep_on_wake", True)),
+        beep_device=voice_cfg.get("speaker_device", "default"),
+        beep_freq=int(voice_cfg.get("beep_freq_hz", 800)),
+        beep_duration_s=float(voice_cfg.get("beep_duration_s", 0.5)),
     )
-    # Enable a short beep on wake using the configured ALSA device (if present)
-    try:
-        detector = WakeWordDetector(
-            model_name=voice_cfg.get("wake_word_model", "hey_jarvis_v0.1"),
-            audio_queue=audio.queue,
-            threshold=float(voice_cfg.get("wake_word_threshold", 0.5)),
-            log_scores=debug_wake,
-            log_every=wake_log_every,
-            beep_on_wake=bool(voice_cfg.get("beep_on_wake", True)),
-            beep_device=voice_cfg.get("alsa_device", None),
-            beep_freq=int(voice_cfg.get("beep_freq_hz", 800)),
-            beep_duration_s=float(voice_cfg.get("beep_duration_s", 0.5)),
-        )
-    except TypeError:
-        # Fallback for older installs: construct without beep args
-        detector = WakeWordDetector(
-            model_name=voice_cfg.get("wake_word_model", "hey_jarvis_v0.1"),
-            audio_queue=audio.queue,
-            threshold=float(voice_cfg.get("wake_word_threshold", 0.5)),
-            log_scores=debug_wake,
-            log_every=wake_log_every,
-        )
 
     # Wire the wake event from the detector into the recognizer
     recognizer._wake_event = detector.wake_event
     # Wire listening_event so STT can suppress wake beep while active
     recognizer._listening_event = detector.listening_event
     # Provide recognizer with beep playback settings for timeout tone.
-    recognizer._beep_device = voice_cfg.get("alsa_device", None)
+    recognizer._beep_device = voice_cfg.get("speaker_device", "default")
     recognizer._beep_freq = int(voice_cfg.get("beep_freq_hz", 800))
     recognizer._beep_duration_s = float(voice_cfg.get("beep_duration_s", 0.5))
     # Expose recognizer status to the API

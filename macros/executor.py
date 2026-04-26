@@ -18,10 +18,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import yaml
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from redrat.device import RedRatDevice
 from redrat.store import SignalStore, SignalNotFoundError
 
 log = logging.getLogger(__name__)

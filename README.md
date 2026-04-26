@@ -29,8 +29,7 @@ The RedRat3 is a USB IR transceiver that can both learn and replay arbitrary IR
 signals. It has an in-kernel Linux driver (`redrat3`, part of `rc-core`) that
 exposes the device as a standard LIRC chardev at `/dev/lirc0`.
 
-This project uses the **kernel LIRC driver** rather than the previous custom
-PyUSB approach. The kernel driver:
+This project uses the **kernel LIRC driver**. The kernel driver:
 
 - is automatically loaded on device plug-in by udev,
 - exposes the standard LIRC `MODE2` pulse/space interface so no vendor-level USB
@@ -83,15 +82,6 @@ macro fires — all offline, with no cloud dependency.
 | `voice/command_matcher.py` | rapidfuzz `token_set_ratio` phrase matching                          |
 | `voice/store.py`           | YAML-backed voice-command store; signals STT rebuild on change       |
 | `api/server.py`            | Flask REST API and single-page web control panel                     |
-
-### IR backend selection
-
-`config/config.yaml` → `redrat.backend`:
-
-| Value              | Driver used                                                                |
-| ------------------ | -------------------------------------------------------------------------- |
-| `lirc` _(default)_ | `redrat/lirc_device.py` — kernel `redrat3` + LIRC chardev                  |
-| `usb`              | `redrat/device.py` — direct PyUSB (requires kernel driver **blacklisted**) |
 
 ---
 
@@ -153,7 +143,6 @@ sudo apt install -y \
   libportaudio2 \       # sounddevice / PortAudio runtime
   portaudio19-dev \     # PortAudio headers (needed to build sounddevice wheel)
   libasound2-dev \      # ALSA headers
-  libusb-1.0-0 \        # libusb runtime (PyUSB, optional usb backend)
   unzip curl            # for the model download script
 ```
 
@@ -231,8 +220,7 @@ All runtime settings live in `config/config.yaml`. An annotated example:
 
 ```yaml
 redrat:
-  backend: "lirc" # "lirc" (kernel driver, default) or "usb" (PyUSB)
-  lirc_path: "/dev/lirc0" # path to the LIRC chardev (lirc backend only)
+  lirc_path: "/dev/lirc0" # path to the LIRC chardev
 
 flask:
   host: "0.0.0.0"
@@ -245,9 +233,13 @@ storage:
   voice_commands: "config/voice_commands.yaml"
 
 voice:
-  # ALSA device name — run `arecord -L` or `python -m sounddevice` to list.
+  # ALSA input device for the microphone — run `arecord -L` or `python -m sounddevice` to list.
   # "default" uses the system default input; "hw:1,0" pins a specific card.
   alsa_device: "default"
+
+  # ALSA output device for beep/acknowledgement tones — run `aplay -L` to list.
+  # Defaults to the system default output device.
+  speaker_device: "default"
 
   # openWakeWord model name (built-in) or path to a custom .onnx/.tflite file.
   wake_word_model: "hey_jarvis_v0.1"
@@ -411,19 +403,25 @@ POST   /api/signals/learn               learn a new signal from remote
 POST   /api/signals/send                transmit a signal once
 POST   /api/signals/send-burst          transmit repeatedly for N seconds
 DELETE /api/signals/<name>              delete a signal
+GET    /api/signals/export              download ir_codes.yaml
+POST   /api/signals/import              upload and replace ir_codes.yaml
 
 GET    /api/macros                      list all macros
-POST   /api/macros                      create/update a macro
+POST   /api/macros                      create/update a macro (auto-creates voice command)
 POST   /api/macros/run                  run a macro (async)
 DELETE /api/macros/<name>               delete a macro
+GET    /api/macros/export               download macros.yaml
+POST   /api/macros/import               upload and replace macros.yaml
 
 GET    /api/voice/status                current STT pipeline state
 GET    /api/voice/commands              list voice command mappings
 POST   /api/voice/commands              add a new voice command
 PUT    /api/voice/commands/<id>         update a voice command
 DELETE /api/voice/commands/<id>         delete a voice command
+GET    /api/voice/commands/export       download voice_commands.yaml
+POST   /api/voice/commands/import       upload and replace voice_commands.yaml
 
-GET    /api/devices                     enumerate LIRC / USB devices
+GET    /api/devices                     enumerate LIRC devices
 GET    /api/device/diagnostics          run device self-check
 ```
 
@@ -480,10 +478,8 @@ source .venv/bin/activate && python -m sounddevice
 ```
 
 Set `voice.alsa_device` in `config.yaml` accordingly, e.g. `"hw:2,0"`,
-`"plughw:2,0"`, or `"default"`.
-
-If the device rejects 16 kHz natively, `AudioCapture` automatically falls back
-to the device's default sample rate and resamples to 16 kHz in software.
+`"plughw:2,0"`, or `"default"`. To use a separate speaker for beeps, set
+`voice.speaker_device` to the output device name (e.g. `"hw:0,0"` or `"default"`).
 
 ---
 
@@ -505,12 +501,6 @@ groups                       # check your user's groups
 sudo usermod -aG video scott # add user to the owning group
 # then log out and back in
 ```
-
-### `Resource busy` / interface claimed error (USB backend only)
-
-Another process (e.g. `lircd`, `ir-keytable`, or a previous instance of this
-service) has claimed the USB interface. Either stop the other process or use
-the `lirc` backend.
 
 ### Wake word never triggers
 
