@@ -370,8 +370,20 @@ class LircDevice:
         # Fell through the deadline without a TIMEOUT packet — use what we got
         return self._build_irdata(timings_us, carrier_hz)
 
+    # Maximum duration (µs) for a valid inter-symbol space within a burst.
+    # Any leading entry longer than this is a pre-burst idle gap (the time
+    # we waited for the user to press the button) and must be discarded.
+    _MAX_INTER_SYMBOL_US = 50_000
+
     @staticmethod
     def _build_irdata(timings_us: list[int], carrier_hz: int):
+        # Strip any leading entries that are pre-burst idle gaps (i.e. the
+        # long space LIRC records while waiting for the first IR transition).
+        # Valid IR inter-symbol spaces are well under 50 ms; anything longer
+        # is the "waiting for button press" gap and carries no remote data.
+        while timings_us and timings_us[0] > LircDevice._MAX_INTER_SYMBOL_US:
+            timings_us = timings_us[1:]
+
         # Strip trailing space (if any) — LIRC bursts often end with a space
         # before the TIMEOUT packet; we only want the active signal content.
         while timings_us and len(timings_us) % 2 == 0:
