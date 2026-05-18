@@ -226,6 +226,26 @@ def main() -> None:
     log.info("Starting speech recognizer ...")
     recognizer.start()
 
+    # Play a startup beep to indicate successful boot.
+    try:
+        import numpy as np
+        import sounddevice as _sd
+
+        _boot_device = voice_cfg.get("speaker_device", "default")
+        _boot_freq = int(voice_cfg.get("beep_freq_hz", 800))
+        _boot_dur = float(voice_cfg.get("beep_duration_s", 0.5))
+        try:
+            _info = _sd.query_devices(_boot_device, kind="output")
+            _rate = int(_info.get("default_samplerate", 16000))
+        except Exception:
+            _rate = 16000
+        _samples = int(round(_boot_dur * _rate))
+        _t = np.arange(_samples, dtype=np.float32) / float(_rate)
+        _wave = (0.3 * np.sin(2.0 * np.pi * float(_boot_freq) * _t)).astype(np.float32)
+        _sd.play(_wave, samplerate=_rate, device=_boot_device, blocking=True)
+    except Exception:
+        log.debug("Startup beep skipped (sounddevice unavailable or failed)")
+
     log.info("RedRat IR Controller running.  Press Ctrl-C to stop.")
     shutdown_event.wait()
 

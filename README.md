@@ -93,6 +93,9 @@ macro fires — all offline, with no cloud dependency.
   `0x0005`).
 - **USB microphone** (or USB webcam with mic) for voice commands. The Logitech
   HD Pro Webcam C920 (`hw:4,0`) has been used in development.
+ - **reSpeaker 2-Mics Pi HAT** (Seeed) — on-board microphone HAT for Raspberry
+   Pi. When using this HAT, install the Seeed voice card driver (`seeed-voicecard`)
+   as described at https://github.com/respeaker/seeed-voicecard.
 
 ---
 
@@ -144,6 +147,20 @@ sudo apt install -y \
   portaudio19-dev \     # PortAudio headers (needed to build sounddevice wheel)
   libasound2-dev \      # ALSA headers
   unzip curl            # for the model download script
+```
+
+### reSpeaker HAT (seeed-voicecard)
+
+If you're using the reSpeaker 2-Mics Pi HAT, the HAT requires the Seeed
+voice-card driver. Follow the installation instructions in the repository:
+https://github.com/respeaker/seeed-voicecard
+
+Example (follow upstream README for full, up-to-date instructions):
+
+```bash
+git clone https://github.com/respeaker/seeed-voicecard.git
+cd seeed-voicecard
+sudo ./install.sh
 ```
 
 ### Kernel driver
