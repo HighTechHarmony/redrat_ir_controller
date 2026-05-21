@@ -245,16 +245,27 @@ class WakeWordDetector:
                                 except Exception:
                                     rate = 16000
 
-                                samples = int(round(self._beep_duration_s * rate))
-                                if samples <= 0:
+                                # Determine sample counts and try playing at the device's
+                                # default samplerate first. For each trial rate we
+                                # generate the waveform at that rate so the played
+                                # audio has the correct pitch and duration.
+                                if self._beep_duration_s <= 0:
                                     raise ValueError("beep_duration_s too small")
-                                t = np.arange(samples, dtype=np.float32) / float(rate)
-                                wave = (0.3 * np.sin(2.0 * np.pi * float(self._beep_freq) * t)).astype(np.float32)
-                                # sounddevice.play is non-blocking when blocking=False
-                                try:
-                                    _sd.play(wave, samplerate=rate, device=self._beep_device, blocking=False)
-                                except Exception as _exc:
-                                    log.warning("Beep playback failed: %s", _exc)
+                                last_exc = None
+                                for trial_rate in (rate, 48000, 44100, 16000):
+                                    try:
+                                        samples = int(round(self._beep_duration_s * float(trial_rate)))
+                                        if samples <= 0:
+                                            raise ValueError("beep_duration_s too small")
+                                        t = np.arange(samples, dtype=np.float32) / float(trial_rate)
+                                        wave = (0.3 * np.sin(2.0 * np.pi * float(self._beep_freq) * t)).astype(np.float32)
+                                        _sd.play(wave, samplerate=int(trial_rate), device=self._beep_device, blocking=False)
+                                        last_exc = None
+                                        break
+                                    except Exception as _exc:
+                                        last_exc = _exc
+                                if last_exc is not None:
+                                    log.warning("Beep playback failed: %s", last_exc)
                             except Exception:
                                 log.debug("sounddevice not available for beep playback or failed to configure")
 

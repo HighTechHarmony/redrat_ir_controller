@@ -198,16 +198,26 @@ class SpeechRecognizer:
                         rate = 16000
 
                     dur = 0.15
-                    samples = int(round(dur * rate))
-                    if samples > 0:
-                        t = np.arange(samples, dtype=np.float32) / float(rate)
-                        tone1 = (0.3 * np.sin(2.0 * np.pi * 800.0 * t)).astype(np.float32)
-                        tone2 = (0.3 * np.sin(2.0 * np.pi * 1600.0 * t)).astype(np.float32)
-                        wave = np.concatenate((tone1, tone2))
+                    # Generate the acknowledgement tones at the trial playback
+                    # rate so pitch/duration stay correct if we fall back to
+                    # another supported rate.
+                    last_exc = None
+                    for trial_rate in (rate, 48000, 44100, 16000):
                         try:
-                            _sd.play(wave, samplerate=rate, device=device, blocking=False)
+                            samples = int(round(dur * float(trial_rate)))
+                            if samples <= 0:
+                                raise ValueError("ack beep duration too small")
+                            t = np.arange(samples, dtype=np.float32) / float(trial_rate)
+                            tone1 = (0.3 * np.sin(2.0 * np.pi * 800.0 * t)).astype(np.float32)
+                            tone2 = (0.3 * np.sin(2.0 * np.pi * 1600.0 * t)).astype(np.float32)
+                            wave = np.concatenate((tone1, tone2))
+                            _sd.play(wave, samplerate=int(trial_rate), device=device, blocking=False)
+                            last_exc = None
+                            break
                         except Exception as _exc:
-                            log.warning("Ack beep playback failed: %s", _exc)
+                            last_exc = _exc
+                    if last_exc is not None:
+                        log.warning("Ack beep playback failed: %s", last_exc)
                 except Exception:
                     log.debug("sounddevice not available for ack beep")
                 try:
@@ -233,16 +243,23 @@ class SpeechRecognizer:
                     except Exception:
                         rate = 16000
 
-                    samples = int(round(duration * rate))
-                    if samples > 0:
-                        t = np.arange(samples, dtype=np.float32) / float(rate)
-                        wave = (0.3 * np.sin(2.0 * np.pi * float(freq) * t)).astype(
-                            np.float32
-                        )
+                    # Generate the timeout tone at the trial playback rate so
+                    # pitch/duration remain correct when falling back rates.
+                    last_exc = None
+                    for trial_rate in (rate, 48000, 44100, 16000):
                         try:
-                            _sd.play(wave, samplerate=rate, device=device, blocking=False)
+                            samples = int(round(duration * float(trial_rate)))
+                            if samples <= 0:
+                                raise ValueError("timeout beep duration too small")
+                            t = np.arange(samples, dtype=np.float32) / float(trial_rate)
+                            wave = (0.3 * np.sin(2.0 * np.pi * float(freq) * t)).astype(np.float32)
+                            _sd.play(wave, samplerate=int(trial_rate), device=device, blocking=False)
+                            last_exc = None
+                            break
                         except Exception as _exc:
-                            log.warning("Timeout beep playback failed: %s", _exc)
+                            last_exc = _exc
+                    if last_exc is not None:
+                        log.warning("Timeout beep playback failed: %s", last_exc)
                 except Exception:
                     log.debug("sounddevice not available for timeout beep")
 
