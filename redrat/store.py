@@ -99,11 +99,29 @@ class SignalStore:
                 f"Signal name {name!r} must be non-empty and contain only "
                 "alphanumeric characters, underscores, or hyphens."
             )
+        # Sanitize timings to remove obvious pre-burst idle gaps and any
+        # trailing space so stored signals contain only the active content.
+        def _sanitize_timings(timings: List[int]) -> List[int]:
+            t = list(timings)
+            # Leading entries larger than this are almost certainly the
+            # "waiting for button press" gap recorded by some backends.
+            MAX_LEADING_SILENCE_US = 50_000
+            while t and t[0] > MAX_LEADING_SILENCE_US:
+                t = t[1:]
+
+            # Ensure the signal ends with a pulse (odd number of timings).
+            while t and len(t) % 2 == 0:
+                t = t[:-1]
+
+            return t
+
+        sanitized = _sanitize_timings(ir.timings_us)
+
         with self._lock:
             self._signals[name] = {
-                "carrier_hz": ir.carrier_hz,
-                "timings_us": ir.timings_us,
-                "repeat": ir.no_repeats,
+                "carrier_hz": int(ir.carrier_hz),
+                "timings_us": sanitized,
+                "repeat": int(ir.no_repeats),
             }
             self._save()
         log.info("Saved signal %r (%d timings)", name, len(ir.timings_us))
