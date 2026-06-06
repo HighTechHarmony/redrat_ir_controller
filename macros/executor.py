@@ -78,18 +78,47 @@ class MacroExecutor:
         tmp.replace(self._path)
 
     # ------------------------------------------------------------------
+    # Virtual macros  (single-step macros auto-created for every signal)
+    # ------------------------------------------------------------------
+
+    def _is_virtual(self, name: str) -> bool:
+        """Return True if *name* is a signal name without a real macro."""
+        with self._lock:
+            if name in self._macros:
+                return False
+        try:
+            self._store.get(name)
+            return True
+        except SignalNotFoundError:
+            return False
+
+    def _virtual_steps(self, name: str) -> List[dict] | None:
+        """Return a single-step macro definition if *name* is a signal, else None."""
+        try:
+            self._store.get(name)
+            return [{"signal": name}]
+        except SignalNotFoundError:
+            return None
+
+    # ------------------------------------------------------------------
     # Inspection
     # ------------------------------------------------------------------
 
     def list_macros(self) -> Dict[str, List[dict]]:
-        """Return a copy of all macro definitions."""
+        """Return a copy of all macro definitions, including virtual macros for signals."""
         with self._lock:
-            return {k: list(v) for k, v in self._macros.items()}
+            result = {k: list(v) for k, v in self._macros.items()}
+        for sig_name in self._store.list_names():
+            if sig_name not in result:
+                result[sig_name] = [{"signal": sig_name}]
+        return result
 
     def macro_names(self) -> List[str]:
-        """Return sorted list of macro names."""
+        """Return sorted list of macro names (real + virtual)."""
         with self._lock:
-            return sorted(self._macros.keys())
+            real = set(self._macros.keys())
+        virtual = {s for s in self._store.list_names() if s not in real}
+        return sorted(real | virtual)
 
     def save_macro(self, name: str, steps: List[dict]) -> None:
         """Create or replace a macro and persist it to YAML."""
@@ -143,14 +172,18 @@ class MacroExecutor:
         """
         Execute a macro by name.
 
-        Each step sends the named IR signal and then sleeps for delay_ms.
-        Raises MacroNotFoundError if the macro doesn't exist.
+        If no real macro is found, falls back to a virtual single-step
+        macro for any signal in the IR code store.
+
+        Raises MacroNotFoundError if the name is neither a macro nor a signal.
         Raises SignalNotFoundError or RedRatError on IR signal problems.
         """
         with self._lock:
             steps = self._macros.get(name)
             if steps is not None:
                 steps = list(steps)
+        if steps is None:
+            steps = self._virtual_steps(name)
         if steps is None:
             raise MacroNotFoundError(name)
 

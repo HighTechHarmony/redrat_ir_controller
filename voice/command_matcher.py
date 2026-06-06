@@ -16,6 +16,10 @@ from rapidfuzz import fuzz, process, utils
 log = logging.getLogger(__name__)
 
 
+class CommandNotMatchedError(Exception):
+    """Raised when no voice command phrase matches the transcript above threshold."""
+
+
 class CommandMatcher:
     """
     Matches a transcription string to the closest registered phrase and
@@ -48,12 +52,38 @@ class CommandMatcher:
         """
         Try to match *transcript* to a command and run the mapped macro.
 
-        No-op (with a log warning) if no match is found above threshold.
+        If the transcript contains Vosk's out-of-vocabulary marker [unk],
+        only the text *before* the first [unk] is used for matching.
+        This allows trailing noise ("switch to computer [unk]") while
+        rejecting cases where a key word was unrecognised ("switch to [unk]"
+        should not match "switch to computer").
+
+        Raises CommandNotMatchedError if no match is found above threshold.
+        Lets macro execution exceptions propagate up to the caller.
         """
+        match_text = transcript
+        if "[unk]" in transcript.lower():
+            idx = transcript.lower().index("[unk]")
+            prefix = transcript[:idx].strip()
+            if not prefix:
+                log.info(
+                    "Transcript starts with [unk] — rejecting (transcript=%r)",
+                    transcript,
+                )
+                raise CommandNotMatchedError(
+                    f"Transcript {transcript!r} starts with unrecognised word"
+                )
+            log.debug(
+                "Stripped [unk] suffix from transcript: %r → prefix %r",
+                transcript,
+                prefix,
+            )
+            match_text = prefix
+
         phrase_map = self._get_phrase_map()
         if not phrase_map:
             log.warning("No voice commands registered — ignoring transcript %r", transcript)
-            return
+            raise CommandNotMatchedError("No voice commands registered")
 
         matched_phrase, macro_name = self._match(transcript, phrase_map)
         if matched_phrase is None:
@@ -62,7 +92,9 @@ class CommandMatcher:
                 transcript,
                 self._threshold,
             )
-            return
+            raise CommandNotMatchedError(
+                f"No match found for transcript {transcript!r} (threshold={self._threshold})"
+            )
 
         log.info(
             "Matched %r → macro %r (phrase=%r)",
@@ -70,10 +102,7 @@ class CommandMatcher:
             macro_name,
             matched_phrase,
         )
-        try:
-            self._run_macro(macro_name)
-        except Exception as exc:
-            log.error("Error running macro %r: %s", macro_name, exc)
+        self._run_macro(macro_name)
 
     def _match(
         self, transcript: str, phrase_map: Dict[str, str]

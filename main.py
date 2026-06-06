@@ -135,6 +135,7 @@ def main() -> None:
             macro_executor.run(name)
         except Exception as exc:
             log.error("Macro %r failed: %s", name, exc)
+            raise
 
     matcher = CommandMatcher(
         get_phrase_map=voice_store.phrase_to_macro,

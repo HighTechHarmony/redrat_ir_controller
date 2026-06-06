@@ -124,6 +124,90 @@ class SpeechRecognizer:
             log.debug("No phrases defined — using open vocabulary")
             self._recognizer = vosk.KaldiRecognizer(self._vosk_model, _VOSK_RATE)
 
+    def _play_dual_tone(
+        self,
+        freq1: float,
+        freq2: float,
+        dur: float = 0.15,
+    ) -> None:
+        """Play two sequential sine tones (non-blocking) via sounddevice.
+
+        freq1, freq2 — frequencies in Hz for the first and second tone.
+        dur         — duration in seconds for each tone segment.
+        Failures are logged at DEBUG level — never raises.
+        """
+        try:
+            import sounddevice as _sd
+
+            device = getattr(self, "_beep_device", None)
+            try:
+                info = _sd.query_devices(device, kind="output")
+                rate = int(info.get("default_samplerate", 16000))
+            except Exception:
+                rate = 16000
+
+            last_exc = None
+            for trial_rate in (rate, 48000, 44100, 16000):
+                try:
+                    samples = int(round(dur * float(trial_rate)))
+                    if samples <= 0:
+                        raise ValueError("tone duration too small")
+                    t = np.arange(samples, dtype=np.float32) / float(trial_rate)
+                    tone1 = (0.3 * np.sin(2.0 * np.pi * freq1 * t)).astype(np.float32)
+                    tone2 = (0.3 * np.sin(2.0 * np.pi * freq2 * t)).astype(np.float32)
+                    wave = np.concatenate((tone1, tone2))
+                    _sd.play(wave, samplerate=int(trial_rate), device=device, blocking=False)
+                    last_exc = None
+                    break
+                except Exception as _exc:
+                    last_exc = _exc
+            if last_exc is not None:
+                log.warning("Tone playback failed: %s", last_exc)
+        except Exception:
+            log.debug("sounddevice not available for tone playback")
+
+    def _play_failure_pattern(self) -> None:
+        """Play three 800 Hz beeps (0.25s each, 0.10s spacing) — blocking.
+
+        Indicates a voice command was heard but failed to execute.
+        """
+        try:
+            import sounddevice as _sd
+
+            device = getattr(self, "_beep_device", None)
+            try:
+                info = _sd.query_devices(device, kind="output")
+                rate = int(info.get("default_samplerate", 16000))
+            except Exception:
+                rate = 16000
+
+            beep_dur = 0.25
+            gap_dur = 0.10
+            freq = 800.0
+
+            last_exc = None
+            for trial_rate in (rate, 48000, 44100, 16000):
+                try:
+                    samples = int(round(beep_dur * float(trial_rate)))
+                    if samples <= 0:
+                        raise ValueError("beep duration too small")
+                    t = np.arange(samples, dtype=np.float32) / float(trial_rate)
+                    beep_wave = (0.3 * np.sin(2.0 * np.pi * freq * t)).astype(np.float32)
+
+                    for i in range(3):
+                        _sd.play(beep_wave, samplerate=int(trial_rate), device=device, blocking=True)
+                        if i < 2:
+                            time.sleep(gap_dur)
+
+                    last_exc = None
+                    break
+                except Exception as _exc:
+                    last_exc = _exc
+            if last_exc is not None:
+                log.warning("Failure pattern playback failed: %s", last_exc)
+        except Exception:
+            log.debug("sounddevice not available for failure pattern")
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
@@ -186,44 +270,15 @@ class SpeechRecognizer:
 
             if transcript and transcript != "[unk]":
                 log.info("Transcription: %r", transcript)
-                # Play acknowledgement beep: 800Hz for 0.25s, then 1600Hz for 0.25s
-                try:
-                    import sounddevice as _sd
-
-                    device = getattr(self, "_beep_device", None)
-                    try:
-                        info = _sd.query_devices(device, kind="output")
-                        rate = int(info.get("default_samplerate", 16000))
-                    except Exception:
-                        rate = 16000
-
-                    dur = 0.15
-                    # Generate the acknowledgement tones at the trial playback
-                    # rate so pitch/duration stay correct if we fall back to
-                    # another supported rate.
-                    last_exc = None
-                    for trial_rate in (rate, 48000, 44100, 16000):
-                        try:
-                            samples = int(round(dur * float(trial_rate)))
-                            if samples <= 0:
-                                raise ValueError("ack beep duration too small")
-                            t = np.arange(samples, dtype=np.float32) / float(trial_rate)
-                            tone1 = (0.3 * np.sin(2.0 * np.pi * 800.0 * t)).astype(np.float32)
-                            tone2 = (0.3 * np.sin(2.0 * np.pi * 1600.0 * t)).astype(np.float32)
-                            wave = np.concatenate((tone1, tone2))
-                            _sd.play(wave, samplerate=int(trial_rate), device=device, blocking=False)
-                            last_exc = None
-                            break
-                        except Exception as _exc:
-                            last_exc = _exc
-                    if last_exc is not None:
-                        log.warning("Ack beep playback failed: %s", last_exc)
-                except Exception:
-                    log.debug("sounddevice not available for ack beep")
+                # Immediate acknowledgement beep — command was heard
+                self._play_dual_tone(800.0, 1600.0, dur=0.15)
                 try:
                     self._on_transcript(transcript)
+                    # Success — no follow-up beep
                 except Exception as exc:
-                    log.error("on_transcript raised: %s", exc)
+                    log.error("Command failed: %s", exc)
+                    # Failure — three-beep pattern
+                    self._play_failure_pattern()
             else:
                 log.info("No command recognised (transcript=%r)", transcript)
                 # Play a short timeout tone one octave down (half frequency)

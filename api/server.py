@@ -523,6 +523,9 @@ def _home_html() -> str:
       table.vc-table td {{ border-bottom:1px solid #eee; padding:0.3rem 0.4rem; vertical-align:middle; }}
       table.vc-table tr:hover td {{ background:#f9f9f9; }}
       .vc-edit-row {{ background:#fffbe6 !important; }}
+      .sortable {{ cursor:pointer; user-select:none; }}
+      .sortable:hover {{ background:#f0f0f0; }}
+      .sort-indicator {{ font-size:0.75rem; margin-left:0.2rem; color:#888; }}
     </style>
   </head>
   <body>
@@ -580,13 +583,13 @@ def _home_html() -> str:
         <label>Phrase</label>
         <input id="vc-phrase" type="text" placeholder="e.g. turn on the lights" style="min-width:220px;" />
         <label style="min-width:50px;">Macro</label>
-        <input id="vc-macro" type="text" placeholder="e.g. lights_on" />
+        <select id="vc-macro" style="min-width:180px;"></select>
         <button id="btn-vc-save">Add</button>
         <button id="btn-vc-cancel" style="display:none;">Cancel</button>
       </div>
       <div id="vc-result" class="hint"></div>
       <table class="vc-table" id="vc-table">
-        <thead><tr><th>Phrase</th><th>Macro</th><th style="width:120px;"></th></tr></thead>
+        <thead><tr><th data-sort="phrase" class="sortable">Phrase <span class="sort-indicator"></span></th><th data-sort="macro" class="sortable">Macro <span class="sort-indicator"></span></th><th style="width:120px;"></th></tr></thead>
         <tbody id="vc-tbody"></tbody>
       </table>
     </div>
@@ -676,6 +679,23 @@ def _home_html() -> str:
           o.value = n; o.textContent = n;
           sel.appendChild(o);
         }});
+        // Also refresh the voice-command macro dropdown
+        refreshMacroDropdown();
+      }}
+
+      function refreshMacroDropdown() {{
+        const sel = $("vc-macro");
+        const prev = sel.value;
+        sel.innerHTML = "";
+        Object.keys(lastMacros).sort().forEach(n => {{
+          const o = document.createElement('option');
+          o.value = n; o.textContent = n;
+          sel.appendChild(o);
+        }});
+        // Restore previous selection if still present
+        if (prev && [...sel.options].some(o => o.value === prev)) {{
+          sel.value = prev;
+        }}
       }}
 
       $("btn-learn").onclick = async () => {{
@@ -782,12 +802,36 @@ def _home_html() -> str:
 
       // ── Voice Commands ────────────────────────────────────────────────
       let vcEditingId = null;
+      let vcSortCol = null;
+      let vcSortDir = 1; // 1 = asc, -1 = desc
+      let vcData = [];
 
-      async function refreshVoiceCommands() {{
-        const cmds = await api('/api/voice/commands');
+      function vcSort(col) {{
+        if (vcSortCol === col) {{
+          vcSortDir *= -1;
+        }} else {{
+          vcSortCol = col;
+          vcSortDir = 1;
+        }}
+        // Update indicators
+        document.querySelectorAll("#vc-table .sort-indicator").forEach(el => el.textContent = "");
+        const th = document.querySelector(`#vc-table th[data-sort="${{col}}"]`);
+        if (th) th.querySelector(".sort-indicator").textContent = vcSortDir === 1 ? "▲" : "▼";
+        vcRenderTable();
+      }}
+
+      function vcRenderTable() {{
         const tbody = $("vc-tbody");
         tbody.innerHTML = "";
-        cmds.forEach(cmd => {{
+        let sorted = [...vcData];
+        if (vcSortCol) {{
+          sorted.sort((a, b) => {{
+            const va = (a[vcSortCol] || "").toLowerCase();
+            const vb = (b[vcSortCol] || "").toLowerCase();
+            return va < vb ? -vcSortDir : va > vb ? vcSortDir : 0;
+          }});
+        }}
+        sorted.forEach(cmd => {{
           const tr = document.createElement("tr");
           tr.dataset.id = cmd.id;
           tr.innerHTML = `
@@ -799,6 +843,17 @@ def _home_html() -> str:
             </td>`;
           tbody.appendChild(tr);
         }});
+        // Re-apply edit row highlight
+        if (vcEditingId) {{
+          document.querySelectorAll("#vc-tbody tr").forEach(tr => {{
+            tr.classList.toggle("vc-edit-row", tr.dataset.id === vcEditingId);
+          }});
+        }}
+      }}
+
+      async function refreshVoiceCommands() {{
+        vcData = await api('/api/voice/commands');
+        vcRenderTable();
       }}
 
       function vcStartEdit(id, phrase, macro) {{
@@ -825,7 +880,8 @@ def _home_html() -> str:
       function vcCancelEdit() {{
         vcEditingId = null;
         $("vc-phrase").value = "";
-        $("vc-macro").value = "";
+        const msel = $("vc-macro");
+        if (msel.options.length) msel.selectedIndex = 0;
         $("btn-vc-save").textContent = "Add";
         $("btn-vc-cancel").style.display = "none";
         document.querySelectorAll("#vc-tbody tr").forEach(tr => tr.classList.remove("vc-edit-row"));
@@ -888,6 +944,11 @@ def _home_html() -> str:
       $("btn-imp-signals").onclick = () => importYaml("imp-signals-file", "imp-signals-result", "/api/signals/import", refreshSignals);
       $("btn-imp-macros").onclick  = () => importYaml("imp-macros-file",  "imp-macros-result",  "/api/macros/import",  refreshMacros);
       $("btn-imp-vc").onclick      = () => importYaml("imp-vc-file",      "imp-vc-result",      "/api/voice/commands/import", refreshVoiceCommands);
+
+      // ── Sortable column headers ───────────────────────────────────────
+      document.querySelectorAll("#vc-table th[data-sort]").forEach(th => {{
+        th.onclick = () => vcSort(th.dataset.sort);
+      }});
 
       (async function init() {{
         try {{
