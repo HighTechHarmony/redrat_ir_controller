@@ -525,7 +525,52 @@ sudo usermod -aG video scott # add user to the owning group
 # then log out and back in
 ```
 
+### Microphone silent — capture volume is 0%
+
+A very common cause of "the service runs but no voice commands register" is the
+**hardware capture (mic) volume being set to 0%**. The stream opens fine and
+logs `Audio stream running`, but the recorded audio is silence, so the wake word
+can never trigger. If you've seen this once, you'll likely hit it again after
+plugging in a new mic or after a reboot — check this first.
+
+1. Find your input card and inspect its capture controls:
+
+   ```bash
+   arecord -l                     # find your card number, e.g. card 3
+   amixer -c 3 contents           # list every control, including capture volumes
+   amixer -c 3 get Mic            # typical control name for USB mics
+   ```
+
+   You're looking for a capture control at `0%` / `0.00dB` (or muted `[off]`).
+
+2. Raise it:
+
+   ```bash
+   amixer -c 3 sset Mic 100%      # control name varies: Mic / Capture / etc.
+   ```
+
+3. **Persist across reboots** — ALSA mixer settings are reset on boot unless
+   saved:
+
+   ```bash
+   sudo alsactl store             # writes /var/lib/alsa/asound.state
+   ```
+
+4. Verify the mic now picks up real signal:
+
+   ```bash
+   arecord -D hw:3,0 -f S16_LE -r 44100 -c 1 -d 3 /tmp/mic_test.wav
+   ```
+
+   Then check its level (RMS well above the noise floor, spiking when you
+   speak). A dead/zero-gain mic sits around −70 dBFS (just ADC noise); a quiet
+   room is typically −40 to −45 dBFS; speech should peak well above that.
+
 ### Wake word never triggers
+
+> First check the mic capture volume — if it's at 0% the audio is silent and the
+> wake word can never fire. See [Microphone silent — capture volume is 0%](#microphone-silent--capture-volume-is-0)
+> above.
 
 1. Confirm the microphone is capturing audio:
    ```bash

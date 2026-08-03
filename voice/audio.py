@@ -96,11 +96,22 @@ class AudioCapture:
                 fallback_rate,
             )
             self._input_sample_rate = int(fallback_rate)
+            # Size the callback to a fraction of one source frame. A single
+            # 80 ms source frame (e.g. 3528 samples @ 44.1 kHz) is too large a
+            # PortAudio period for many USB devices and overflows its internal
+            # buffer; blocksize=0 lets PortAudio pick a tiny default buffer,
+            # which means ~180 callbacks/sec of numpy allocation and pegs the
+            # CPU. One quarter frame (e.g. 882 @ 44.1 kHz) captures cleanly
+            # at ~50 callbacks/sec with modest CPU.
+            source_frame = max(
+                1,
+                int(round(FRAME_SAMPLES * self._input_sample_rate / TARGET_SAMPLE_RATE)),
+            )
             self._stream = sd.InputStream(
                 samplerate=self._input_sample_rate,
                 channels=CHANNELS,
                 dtype="int16",
-                blocksize=0,
+                blocksize=max(1, source_frame // 4),
                 device=self._device,
                 callback=self._callback,
             )
