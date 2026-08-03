@@ -273,6 +273,12 @@ voice:
   # Minimum rapidfuzz score (0–100) to accept a voice command match.
   command_match_threshold: 70
 
+  # When true (default), you can define short keyword-style phrases like
+  # "projector on" — rapidfuzz token_set_ratio will match transcripts like
+  # "turn on the projector" or "turn the projector on" naturally.
+  # Set false to use full-sentence phrases for stricter matching.
+  fuzzy_match_voice_commands: true
+
   # Play a short beep when the wake word fires (requires ALSA playback support).
   beep_on_wake: true
   beep_freq_hz: 800

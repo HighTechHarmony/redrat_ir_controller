@@ -39,6 +39,12 @@ voice:
   # Minimum rapidfuzz token_set_ratio score (0–100) to accept a command match.
   command_match_threshold: 70
 
+  # When true (default), voice commands can use short keyword-style phrases
+  # like "projector on" — token_set_ratio will naturally match transcripts
+  # like "turn on the projector" or "turn the projector on".
+  # Set false if you prefer full-sentence phrases.
+  fuzzy_match_voice_commands: true
+
   # Debug/logging options
   debug_wake: true
   wake_log_every: 1

@@ -11,6 +11,9 @@ ExecStart=/home/scott/redrat_ir_controller/.venv/bin/python /home/scott/redrat_i
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+# Redirect stdout and stderr to a persistent log file for troubleshooting
+StandardOutput=append:/var/log/redrat-controller.log
+StandardError=append:/var/log/redrat-controller.log
 
 [Install]
 WantedBy=multi-user.target
