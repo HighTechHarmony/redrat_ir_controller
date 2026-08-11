@@ -45,6 +45,9 @@ class WakeWordDetector:
         self._model_name = model_name
         self._audio_queue = audio_queue
         self._threshold = threshold
+        # Optional runtime override of the threshold. When not None it takes
+        # precedence over the configured value (used by "quiet mode").
+        self._threshold_override: Optional[float] = None
         self._cooldown_s = cooldown_s
         self._model = None
         self._thread: Optional[threading.Thread] = None
@@ -66,6 +69,27 @@ class WakeWordDetector:
         # Timestamp of last beep/fire to enforce cooldown independent of
         # `wake_event` being cleared by the STT thread.
         self._last_fire = 0.0
+
+    # ------------------------------------------------------------------
+    # Threshold (with optional runtime override)
+    # ------------------------------------------------------------------
+
+    @property
+    def threshold(self) -> float:
+        """Effective detection threshold (override if set, else configured)."""
+        if self._threshold_override is not None:
+            return self._threshold_override
+        return self._threshold
+
+    @threshold.setter
+    def threshold(self, value: Optional[float]) -> None:
+        """Set a runtime threshold override; pass None to revert to the configured value."""
+        self._threshold_override = value
+        log.info(
+            "Wake word threshold override -> %s (configured=%.2f)",
+            value,
+            self._threshold,
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -196,7 +220,7 @@ class WakeWordDetector:
                         float(top[1]),
                     )
 
-                if score >= self._threshold:
+                if score >= self.threshold:
                     now = time.monotonic()
                     # Enforce cooldown based on wall-clock time so that the
                     # detector won't trigger multiple beeps even if the

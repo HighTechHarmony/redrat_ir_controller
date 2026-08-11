@@ -26,6 +26,7 @@ _signal_store: SignalStore | None = None
 _macro_executor: MacroExecutor | None = None
 _voice_store: VoiceCommandStore | None = None
 _voice_status: dict = {"state": "unavailable"}
+_sensitivity_mgr: object | None = None
 
 _bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -44,14 +45,16 @@ def create_app(
     macro_executor: MacroExecutor,
     voice_store: VoiceCommandStore,
     voice_status: dict,
+    sensitivity_mgr=None,
 ) -> Flask:
     """Create and configure the Flask application."""
-    global _device, _signal_store, _macro_executor, _voice_store, _voice_status
+    global _device, _signal_store, _macro_executor, _voice_store, _voice_status, _sensitivity_mgr
     _device = device
     _signal_store = signal_store
     _macro_executor = macro_executor
     _voice_store = voice_store
     _voice_status = voice_status
+    _sensitivity_mgr = sensitivity_mgr
 
     app = Flask(__name__)
     app.register_blueprint(_bp)
@@ -92,6 +95,9 @@ def api_index():
                 ],
                 "voice": [
                     "GET /api/voice/status",
+                    "GET /api/voice/sensitivity",
+                    "POST /api/voice/sensitivity/suppress",
+                    "POST /api/voice/sensitivity/cancel",
                     "GET /api/voice/commands",
                     "POST /api/voice/commands",
                     "PUT /api/voice/commands/<id>",
@@ -340,6 +346,8 @@ def delete_macro(name: str):
         _macro_executor.delete_macro(name)
     except MacroNotFoundError:
         return _err(f"Macro {name!r} not found", 404)
+    except ValueError as exc:
+        return _err(str(exc), 400)
     return _ok()
 
 
@@ -402,7 +410,37 @@ def run_macro():
 
 @_bp.route("/voice/status", methods=["GET"])
 def voice_status():
-    return _ok(_voice_status)
+    data = dict(_voice_status)
+    if _sensitivity_mgr is not None:
+        data["sensitivity"] = _sensitivity_mgr.status
+    return _ok(data)
+
+
+@_bp.route("/voice/sensitivity", methods=["GET"])
+def get_sensitivity():
+    if _sensitivity_mgr is None:
+        return _err("Sensitivity manager unavailable", 503)
+    return _ok(_sensitivity_mgr.status)
+
+
+@_bp.route("/voice/sensitivity/suppress", methods=["POST"])
+def suppress_sensitivity():
+    if _sensitivity_mgr is None:
+        return _err("Sensitivity manager unavailable", 503)
+    body = request.get_json(silent=True) or {}
+    seconds = int(body.get("seconds", 0) or 0)
+    if seconds <= 0:
+        seconds = _sensitivity_mgr.status.get("default_suppress_s", 3600)
+    _sensitivity_mgr.suppress(seconds)
+    return _ok(_sensitivity_mgr.status)
+
+
+@_bp.route("/voice/sensitivity/cancel", methods=["POST"])
+def cancel_sensitivity():
+    if _sensitivity_mgr is None:
+        return _err("Sensitivity manager unavailable", 503)
+    _sensitivity_mgr.cancel()
+    return _ok(_sensitivity_mgr.status)
 
 
 @_bp.route("/voice/commands", methods=["GET"])
@@ -573,6 +611,25 @@ def _home_html() -> str:
         <div class="row"><label>Macro</label><select id="macro-select"></select></div>
         <div class="row"><button id="btn-run-macro">Run</button><button id="btn-delete-macro">Delete</button><button id="btn-load-macro">Load Into Builder</button></div>
         <div id="macros-result" class="hint"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Wake Word Sensitivity</h2>
+        <p class="hint">Quiet mode raises the wake-word threshold so room chatter won't trigger it.</p>
+        <div class="row"><span id="sens-state" style="font-weight:bold;">Loading...</span></div>
+        <div class="row">
+          <label>Duration</label>
+          <select id="sens-duration">
+            <option value="3600">1 hour</option>
+            <option value="7200">2 hours</option>
+            <option value="14400">4 hours</option>
+          </select>
+        </div>
+        <div class="row">
+          <button id="btn-sens-quiet">Quiet Mode</button>
+          <button id="btn-sens-resume" style="display:none;">Resume Now</button>
+        </div>
+        <div id="sens-result" class="hint"></div>
       </div>
     </div>
 
@@ -945,6 +1002,46 @@ def _home_html() -> str:
       $("btn-imp-macros").onclick  = () => importYaml("imp-macros-file",  "imp-macros-result",  "/api/macros/import",  refreshMacros);
       $("btn-imp-vc").onclick      = () => importYaml("imp-vc-file",      "imp-vc-result",      "/api/voice/commands/import", refreshVoiceCommands);
 
+      // ── Wake Word Sensitivity ─────────────────────────────────────────
+      async function refreshSensitivity() {{
+        try {{
+          const s = await api('/api/voice/sensitivity');
+          const state = $("sens-state");
+          if (s.state === "suppressed") {{
+            const mins = Math.floor(s.remaining_s / 60);
+            const secs = s.remaining_s % 60;
+            state.textContent = `Suppressed — ${{mins}}m ${{secs}}s remaining`;
+            state.style.color = "#a60";
+            $("btn-sens-resume").style.display = "";
+            $("btn-sens-quiet").style.display = "none";
+          }} else {{
+            state.textContent = `Normal (threshold ${{s.threshold}})`;
+            state.style.color = "#0a5";
+            $("btn-sens-resume").style.display = "none";
+            $("btn-sens-quiet").style.display = "";
+          }}
+        }} catch (e) {{
+          show("sens-state", `Error: ${{e.message}}`);
+        }}
+      }}
+
+      $("btn-sens-quiet").onclick = async () => {{
+        try {{
+          const seconds = Number($("sens-duration").value || 3600);
+          await api('/api/voice/sensitivity/suppress', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{seconds}})}});
+          show("sens-result", `Quiet mode on for ${{seconds}}s.`);
+          await refreshSensitivity();
+        }} catch (e) {{ show("sens-result", `Error: ${{e.message}}`); }}
+      }};
+
+      $("btn-sens-resume").onclick = async () => {{
+        try {{
+          await api('/api/voice/sensitivity/cancel', {{method:'POST'}});
+          show("sens-result", "Quiet mode off — back to normal.");
+          await refreshSensitivity();
+        }} catch (e) {{ show("sens-result", `Error: ${{e.message}}`); }}
+      }};
+
       // ── Sortable column headers ───────────────────────────────────────
       document.querySelectorAll("#vc-table th[data-sort]").forEach(th => {{
         th.onclick = () => vcSort(th.dataset.sort);
@@ -955,6 +1052,8 @@ def _home_html() -> str:
           await refreshSignals();
           await refreshMacros();
           await refreshVoiceCommands();
+          await refreshSensitivity();
+          setInterval(refreshSensitivity, 5000);  // keep countdown live
           show("toast", "Panel ready.");
         }} catch (e) {{
           show("toast", `Startup error: ${{e.message}}`);
@@ -993,28 +1092,73 @@ def _api_docs_html() -> str:
     <title>RedRat API Docs</title>
     <style>
       body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; margin: 2rem; color: #222; line-height: 1.45; }
+      h2 { margin-top: 2rem; border-bottom: 1px solid #ddd; padding-bottom: 0.3rem; }
+      h3 { margin-top: 1.4rem; }
       code { background: #f4f4f4; padding: 0.1rem 0.35rem; border-radius: 4px; }
       pre { background: #f8f8f8; border: 1px solid #e5e5e5; padding: 0.75rem; border-radius: 8px; overflow-x: auto; }
+      .route { display: flex; gap: 0.6rem; align-items: baseline; margin: 0.5rem 0; }
+      .method { font-weight: bold; min-width: 3rem; color: #2563eb; }
+      .path { font-family: monospace; }
+      .desc { color: #555; margin-left: 1rem; }
+      ul { margin: 0.2rem 0 0.8rem 0; }
     </style>
   </head>
   <body>
     <h1>RedRat API Docs</h1>
     <p>Base URL: <code>http://HOST:5000/api</code></p>
-    <h2>Core</h2>
+    <p>The web control panel is at <code>http://HOST:5000/</code>.</p>
+
+    <h2>Signals</h2>
+    <div class="route"><span class="method">GET</span><span class="path">/api/signals</span><span class="desc">List all learned signal names.</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/signals/learn</span><span class="desc">Learn a new IR signal. Body: <code>{"name": "signal_name", "timeout_s": 10}</code>.</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/signals/send</span><span class="desc">Transmit a signal once. Body: <code>{"name": "signal_name"}</code>.</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/signals/send-burst</span><span class="desc">Repeatedly transmit. Body: <code>{"name": "...", "duration_s": 4, "interval_ms": 120}</code>.</span></div>
+    <div class="route"><span class="method">DELETE</span><span class="path">/api/signals/&lt;name&gt;</span><span class="desc">Delete a signal.</span></div>
+    <div class="route"><span class="method">GET</span><span class="path">/api/signals/export</span><span class="desc">Download <code>ir_codes.yaml</code>.</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/signals/import</span><span class="desc">Upload a YAML file to replace all signals.</span></div>
+
+    <h2>Macros</h2>
+    <div class="route"><span class="method">GET</span><span class="path">/api/macros</span><span class="desc">List all macros (real, system, and virtual).</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/macros</span><span class="desc">Create or update a macro. Auto-creates a voice command if none maps to it.<br/>
+      Body: <code>{"name": "macro_name", "steps": [{"signal": "sig", "delay_ms": 500}]}</code>.</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/macros/run</span><span class="desc">Run a macro (async). Body: <code>{"name": "macro_name"}</code>. Works for IR macros and system macros.</span></div>
+    <div class="route"><span class="method">DELETE</span><span class="path">/api/macros/&lt;name&gt;</span><span class="desc">Delete a macro. System macros cannot be deleted.</span></div>
+    <div class="route"><span class="method">GET</span><span class="path">/api/macros/export</span><span class="desc">Download <code>macros.yaml</code>.</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/macros/import</span><span class="desc">Upload a YAML file to replace all macros.</span></div>
+
+    <h3>Virtual Delay Tokens</h3>
+    <p>Use these as <code>signal</code> values in macro steps to add pauses without IR:</p>
     <ul>
-      <li><code>GET /api/signals</code></li>
-      <li><code>POST /api/signals/learn</code></li>
-      <li><code>POST /api/signals/send</code></li>
-      <li><code>POST /api/signals/send-burst</code></li>
-      <li><code>DELETE /api/signals/&lt;name&gt;</code></li>
-      <li><code>GET /api/macros</code></li>
-      <li><code>POST /api/macros</code> (save/update macro)</li>
-      <li><code>POST /api/macros/run</code></li>
-      <li><code>DELETE /api/macros/&lt;name&gt;</code></li>
+      <li><code>__delay_1s__</code> — 1 second pause</li>
+      <li><code>__delay_10s__</code> — 10 second pause</li>
     </ul>
-    <h2>Virtual Delay Step</h2>
-    <p>Use the special signal token <code>__delay_1s__</code> in macro steps.</p>
     <pre>{"name":"movie_on","steps":[{"signal":"projector_power"},{"signal":"__delay_1s__"},{"signal":"receiver_power"}]}</pre>
+
+    <h3>System Macros</h3>
+    <p>Code-backed macros that are always available (not stored in <code>macros.yaml</code>):</p>
+    <ul>
+      <li><code>__quiet_mode__</code> — suppress wake-word sensitivity for 1 hour</li>
+      <li><code>__normal_mode__</code> — resume normal wake-word sensitivity</li>
+    </ul>
+    <p>Run them via <code>POST /api/macros/run</code> or map them to voice commands (built-in by default).</p>
+
+    <h2>Voice Commands</h2>
+    <div class="route"><span class="method">GET</span><span class="path">/api/voice/status</span><span class="desc">Returns STT pipeline state (<code>"idle"</code>, <code>"listening"</code>, <code>"recognizing"</code>) plus current sensitivity info.</span></div>
+    <div class="route"><span class="method">GET</span><span class="path">/api/voice/commands</span><span class="desc">List all voice command mappings.</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/voice/commands</span><span class="desc">Add a voice command. Body: <code>{"phrase": "turn on projector", "macro": "projector_on"}</code>.</span></div>
+    <div class="route"><span class="method">PUT</span><span class="path">/api/voice/commands/&lt;id&gt;</span><span class="desc">Update a voice command. Body: <code>{"phrase": "new phrase"}</code> and/or <code>{"macro": "new_macro"}</code>.</span></div>
+    <div class="route"><span class="method">DELETE</span><span class="path">/api/voice/commands/&lt;id&gt;</span><span class="desc">Delete a voice command.</span></div>
+    <div class="route"><span class="method">GET</span><span class="path">/api/voice/commands/export</span><span class="desc">Download <code>voice_commands.yaml</code>.</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/voice/commands/import</span><span class="desc">Upload a YAML file to replace all voice commands.</span></div>
+
+    <h2>Wake Word Sensitivity ("Quiet Mode")</h2>
+    <div class="route"><span class="method">GET</span><span class="path">/api/voice/sensitivity</span><span class="desc">Returns <code>{"state": "normal"|"suppressed", "threshold": 0.8, "suppressed_threshold": 0.99, "remaining_s": null|14399, "default_suppress_s": 3600, "max_suppress_s": 14400}</code>.</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/voice/sensitivity/suppress</span><span class="desc">Enter quiet mode. Body (optional): <code>{"seconds": 3600}</code>. Defaults to 1 hour; max 4 hours.</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/voice/sensitivity/cancel</span><span class="desc">Cancel quiet mode immediately (revert to normal threshold).</span></div>
+
+    <h2>Devices</h2>
+    <div class="route"><span class="method">GET</span><span class="path">/api/devices</span><span class="desc">Enumerate LIRC devices on the system.</span></div>
+    <div class="route"><span class="method">GET</span><span class="path">/api/device/diagnostics</span><span class="desc">Run a self-check on the active RedRat device.</span></div>
   </body>
 </html>
 """

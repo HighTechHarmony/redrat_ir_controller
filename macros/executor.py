@@ -15,7 +15,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Callable, Dict, List
 
 import yaml
 
@@ -25,6 +25,10 @@ log = logging.getLogger(__name__)
 
 VIRTUAL_DELAY_1S = "__delay_1s__"
 VIRTUAL_DELAY_10S = "__delay_10s__"
+
+# Reserved system macro names backed by code (not IR signals).
+SYSTEM_QUIET_MODE = "__quiet_mode__"
+SYSTEM_NORMAL_MODE = "__normal_mode__"
 
 
 class MacroNotFoundError(KeyError):
@@ -44,13 +48,20 @@ class MacroExecutor:
         macro_path: str | Path,
         signal_store: SignalStore,
         device,
+        system_actions: Dict[str, Callable] | None = None,
     ) -> None:
         self._path = Path(macro_path)
         self._store = signal_store
         self._device = device
         self._lock = threading.Lock()
+        self._system_actions: Dict[str, Callable] = dict(system_actions or {})
         self._macros: Dict[str, List[dict]] = {}
         self.reload()
+
+    def set_system_actions(self, actions: Dict[str, Callable]) -> None:
+        """Register code-backed system macros (e.g. quiet mode) keyed by name."""
+        with self._lock:
+            self._system_actions = dict(actions)
 
     # ------------------------------------------------------------------
     # Loading
@@ -84,7 +95,7 @@ class MacroExecutor:
     def _is_virtual(self, name: str) -> bool:
         """Return True if *name* is a signal name without a real macro."""
         with self._lock:
-            if name in self._macros:
+            if name in self._macros or name in self._system_actions:
                 return False
         try:
             self._store.get(name)
@@ -94,6 +105,9 @@ class MacroExecutor:
 
     def _virtual_steps(self, name: str) -> List[dict] | None:
         """Return a single-step macro definition if *name* is a signal, else None."""
+        with self._lock:
+            if name in self._system_actions:
+                return None
         try:
             self._store.get(name)
             return [{"signal": name}]
@@ -105,24 +119,33 @@ class MacroExecutor:
     # ------------------------------------------------------------------
 
     def list_macros(self) -> Dict[str, List[dict]]:
-        """Return a copy of all macro definitions, including virtual macros for signals."""
+        """Return a copy of all macro definitions, including system and virtual macros."""
         with self._lock:
             result = {k: list(v) for k, v in self._macros.items()}
+        for name in self._system_actions:
+            result.setdefault(name, [])
         for sig_name in self._store.list_names():
             if sig_name not in result:
                 result[sig_name] = [{"signal": sig_name}]
         return result
 
     def macro_names(self) -> List[str]:
-        """Return sorted list of macro names (real + virtual)."""
+        """Return sorted list of macro names (real + system + virtual)."""
         with self._lock:
             real = set(self._macros.keys())
+            system = set(self._system_actions.keys())
         virtual = {s for s in self._store.list_names() if s not in real}
-        return sorted(real | virtual)
+        return sorted(real | system | virtual)
 
     def save_macro(self, name: str, steps: List[dict]) -> None:
         """Create or replace a macro and persist it to YAML."""
         _validate_macro_name(name)
+        with self._lock:
+            if name in self._system_actions:
+                # System macros are code-backed; accept any steps but store empty.
+                self._macros[name] = []
+                self._save()
+                return
         normalized: List[dict] = []
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
@@ -159,6 +182,8 @@ class MacroExecutor:
 
     def delete_macro(self, name: str) -> None:
         with self._lock:
+            if name in self._system_actions:
+                raise ValueError(f"System macro {name!r} cannot be deleted")
             if name not in self._macros:
                 raise MacroNotFoundError(name)
             del self._macros[name]
@@ -178,6 +203,13 @@ class MacroExecutor:
         Raises MacroNotFoundError if the name is neither a macro nor a signal.
         Raises SignalNotFoundError or RedRatError on IR signal problems.
         """
+        with self._lock:
+            action = self._system_actions.get(name)
+        if action is not None:
+            log.info("Running system macro %r", name)
+            action()
+            return
+
         with self._lock:
             steps = self._macros.get(name)
             if steps is not None:

@@ -80,6 +80,7 @@ macro fires — all offline, with no cloud dependency.
 | `voice/wake_word.py`       | openWakeWord background thread; fires `wake_event` on detection      |
 | `voice/stt.py`             | Vosk offline STT; restricted vocabulary; rebuilds on command changes |
 | `voice/command_matcher.py` | rapidfuzz `token_set_ratio` phrase matching                          |
+| `voice/sensitivity.py`     | Runtime wake-word threshold override with auto-revert timer          |
 | `voice/store.py`           | YAML-backed voice-command store; signals STT rebuild on change       |
 | `api/server.py`            | Flask REST API and single-page web control panel                     |
 
@@ -91,11 +92,12 @@ macro fires — all offline, with no cloud dependency.
   Raspberry Pi OS Bookworm (64-bit).
 - **RedRat3 or RedRat3-II** USB IR transceiver (VID `0x112A`, PID `0x0001` /
   `0x0005`).
-- **USB microphone** (or USB webcam with mic) for voice commands. The Logitech
-  HD Pro Webcam C920 (`hw:4,0`) has been used in development.
- - **reSpeaker 2-Mics Pi HAT** (Seeed) — on-board microphone HAT for Raspberry
-   Pi. When using this HAT, install the Seeed voice card driver (`seeed-voicecard`)
-   as described at https://github.com/respeaker/seeed-voicecard.
+- **reSpeaker 2-Mics Pi HAT** (Seeed) — on-board stereo microphone + speaker
+  HAT. The WM8960 codec appears as ALSA card 2 and `sounddevice` index 0.
+  Requires the `seeed-voicecard` kernel driver (see Software Prerequisites below).
+- **USB microphone** (alternative) — supported but not the primary setup;
+  set `voice.alsa_device` to the appropriate ALSA hardware address. Logitech
+  HD Pro Webcam C920 (`hw:4,0`) was used in early development.
 
 ---
 
@@ -250,19 +252,23 @@ storage:
   voice_commands: "config/voice_commands.yaml"
 
 voice:
-  # ALSA input device for the microphone — run `arecord -L` or `python -m sounddevice` to list.
-  # "default" uses the system default input; "hw:1,0" pins a specific card.
-  alsa_device: "default"
+  # ALSA input device for the microphone — run `arecord -L` or
+  # `python -m sounddevice` to list.  Use `"hw:2,0"` for the
+  # reSpeaker 2-mic HAT, `"default"` for the system default.
+  alsa_device: "hw:2,0"
 
-  # ALSA output device for beep/acknowledgement tones — run `aplay -L` to list.
-  # Defaults to the system default output device.
-  speaker_device: "default"
+  # Output device for beep/acknowledgement tones.  This is a
+  # sounddevice device *index* (not an ALSA device name).
+  # Run `python -m sounddevice` to list available output devices.
+  # For the reSpeaker HAT (WM8960 codec) this is typically 0.
+  speaker_device: 0
 
   # openWakeWord model name (built-in) or path to a custom .onnx/.tflite file.
   wake_word_model: "hey_jarvis_v0.1"
 
   # Detection confidence threshold (0–1). Lower = more sensitive.
-  wake_word_threshold: 0.3
+  # The "quiet mode" feature temporarily raises this to 0.99.
+  wake_word_threshold: 0.8
 
   # Path to the extracted Vosk model directory.
   vosk_model_path: "models/vosk-model-small-en-us-0.15"
@@ -282,7 +288,13 @@ voice:
   # Play a short beep when the wake word fires (requires ALSA playback support).
   beep_on_wake: true
   beep_freq_hz: 800
-  beep_duration_s: 0.15
+  beep_duration_s: 0.5
+
+  # Debug/logging options (set false in normal operation to avoid CPU load).
+  debug_wake: false
+  wake_log_every: 100
+  debug_audio: false
+  audio_log_every: 100
 ```
 
 ### IR codes, macros, and voice commands
@@ -436,7 +448,10 @@ DELETE /api/macros/<name>               delete a macro
 GET    /api/macros/export               download macros.yaml
 POST   /api/macros/import               upload and replace macros.yaml
 
-GET    /api/voice/status                current STT pipeline state
+GET    /api/voice/status                STT pipeline + sensitivity state
+GET    /api/voice/sensitivity           current sensitivity (threshold, remaining)
+POST   /api/voice/sensitivity/suppress   enter quiet mode (body: {"seconds": 3600})
+POST   /api/voice/sensitivity/cancel     exit quiet mode immediately
 GET    /api/voice/commands              list voice command mappings
 POST   /api/voice/commands              add a new voice command
 PUT    /api/voice/commands/<id>         update a voice command
@@ -454,6 +469,23 @@ immediately — the STT engine rebuilds its Vosk vocabulary without a restart.
 ---
 
 ## Voice Pipeline
+
+### Wake word sensitivity ("quiet mode")
+
+When the room is busy (guests, movie night, etc.), you can temporarily raise the
+wake word threshold so casual conversation won't trigger false wakes:
+
+- Say **"Hey Jarvis, quiet mode"** — the threshold rises from 0.8 to 0.99 for
+  one hour (configurable 1/2/4h via the web UI), then auto-reverts. A descending
+  two-tone beep confirms it.
+- Say **"Hey Jarvis, normal mode"** — reverts immediately. An ascending
+  two-tone beep confirms it.
+- The web panel (`http://redrat:5000`) shows live countdown and Resume/Quiet
+  buttons.
+- The API endpoints are `POST /api/voice/sensitivity/suppress` and
+  `POST /api/voice/sensitivity/cancel`.
+
+### Pipeline flow
 
 ```
 Microphone
@@ -502,9 +534,33 @@ source .venv/bin/activate && python -m sounddevice
 
 Set `voice.alsa_device` in `config.yaml` accordingly, e.g. `"hw:2,0"`,
 `"plughw:2,0"`, or `"default"`. To use a separate speaker for beeps, set
-`voice.speaker_device` to the output device name (e.g. `"hw:0,0"` or `"default"`).
+`voice.speaker_device` to the sounddevice output index (run
+`python -m sounddevice` to list).
 
----
+### Built-in voice commands
+
+These system macros are always available; they don't appear in the voice-command
+YAML file but show up in the macro list and can be triggered by voice or API.
+
+| Phrase        | Macro               | Action                                     |
+| ------------- | ------------------- | ------------------------------------------ |
+| "quiet mode"  | `__quiet_mode__`    | Suppress wake-word (0.8→0.99) for 1 hour    |
+| "normal mode" | `__normal_mode__`   | Resume normal wake-word sensitivity         |
+
+System macros can be run via `POST /api/macros/run` with `{"name": "__quiet_mode__"}`
+and appear in the web UI macro dropdown.
+
+### Diagnostic audio scripts
+
+The repo includes helper scripts for testing the audio hardware:
+
+```bash
+.venv/bin/python scripts/test_audio.py            # verify mic capture stream
+.venv/bin/python scripts/test_playback.py --list   # list sounddevice output devices
+.venv/bin/python scripts/test_playback.py --device 0  # play a test beep
+.venv/bin/python scripts/test_wake_detect.py       # live wake-word score display
+                                               #   (stop the service first!)
+```
 
 ## Troubleshooting
 
@@ -604,6 +660,65 @@ plugging in a new mic or after a reboot — check this first.
 - Lower `command_match_threshold` (default 70) if phrases are close but not
   matching.
 - Ensure the phrase is registered: `GET /api/voice/commands`.
+
+### No beep on startup (or beep sounds wrong)
+
+The startup beep at boot can fail if the codec's default sample rate doesn't
+match the rate the input stream locked to. This is normal — the beep has a
+fallback that tries 48 kHz, 44.1 kHz, then 16 kHz, and the beep will play on
+the first supported rate. If you don't hear it:
+
+1. Test the speaker hardware directly:
+   ```bash
+   aplay -D plughw:2,0 beep.wav   # hardware test (reSpeaker HAT = card 2)
+   ```
+2. If `aplay` works but the beep still doesn't, check the journal for
+   `Startup beep failed` warnings.
+3. Verify `speaker_device` is the correct sounddevice index:
+   ```bash
+   .venv/bin/python -m sounddevice | head -5
+   ```
+
+### No audio / wake word after a power outage
+
+After a power outage, the I2S bus on the reSpeaker HAT can have sync errors:
+```
+bcm2835-i2s fe203000.i2s: I2S SYNC error!
+```
+
+This causes both the beep and microphone to fail silently on the first boot
+after the outage. **A simple service restart recovers it:**
+
+```bash
+sudo systemctl restart redrat.service
+```
+
+To diagnose whether it's the same issue, check `dmesg | grep "I2S SYNC"` and
+the journal for wake-word detection (see Wake word never triggers above).
+
+### Wake word too sensitive (false triggers from room noise)
+
+Use the **quiet mode** feature to temporarily raise the threshold:
+
+- Web panel: click "Quiet Mode" with a 1/2/4 hour duration.
+- Voice: say "Hey Jarvis, quiet mode".
+- API: `POST /api/voice/sensitivity/suppress` with `{"seconds": 3600}`.
+
+The web panel shows a live countdown; say "Hey Jarvis, normal mode" or click
+"Resume Now" to cancel early.
+
+### No wake word detection — check mic with test script
+
+```bash
+sudo systemctl stop redrat.service
+.venv/bin/python scripts/test_wake_detect.py   # live scores; say "hey Jarvis"
+sudo systemctl start redrat.service
+```
+
+Scores should spike above 0.5 when you say the wake word. If they stay at 0:
+the mic isn't providing audio — try the capture-volume checks above, test with
+`arecord -D hw:2,0 -c 2` to confirm the hardware works, and look for `I2C SYNC`
+errors in `dmesg`.
 
 ### systemd service exits immediately
 

@@ -17,18 +17,23 @@ storage:
 voice:
   # ALSA input device for the microphone.
   # Run `arecord -L` or `python -m sounddevice` to list available devices.
-  alsa_device: "hw:3,0"
+  # Use "hw:2,0" for the reSpeaker 2-mic HAT; "hw:3,0" for a USB mic.
+  # Use "default" for the system default input device.
+  alsa_device: "hw:2,0"
 
-  # ALSA output device for beep/acknowledgement tones.
-  # Run `aplay -L` or `python -m sounddevice` to list available output devices.
-  speaker_device: "default"
+  # Output device for beep/acknowledgement tones.
+  # This is a sounddevice device *index* (not an ALSA name).
+  # Run `python -m sounddevice` to list available output devices.
+  # For the reSpeaker HAT (WM8960 codec) this is typically 0.
+  speaker_device: 0
 
   # openWakeWord model name (built-in) or path to a custom .onnx/.tflite file.
   # Built-in options usually include version suffixes like "hey_jarvis_v0.1".
   wake_word_model: "hey_jarvis_v0.1"
 
   # Detection score threshold (0.0–1.0). Lower = more sensitive but more false positives.
-  wake_word_threshold: 0.3
+  # The "quiet mode" feature temporarily raises this to 0.99 for up to 4 hours.
+  wake_word_threshold: 0.8
 
   # Path to the extracted Vosk model directory.
   vosk_model_path: "models/vosk-model-small-en-us-0.15"
@@ -45,8 +50,17 @@ voice:
   # Set false if you prefer full-sentence phrases.
   fuzzy_match_voice_commands: true
 
-  # Debug/logging options
-  debug_wake: true
-  wake_log_every: 1
-  debug_audio: true
-  audio_log_every: 1
+  # Play a short beep when the wake word fires.
+  beep_on_wake: true
+  beep_freq_hz: 800
+  beep_duration_s: 0.5
+
+  # Debug/logging options.
+  # NOTE: debug_audio=true with a low audio_log_every forces per-frame RMS
+  # computation inside the real-time capture callback (even though the log
+  # lines are suppressed at INFO level). Keep debug_audio=false and a higher
+  # audio_log_every in normal operation to avoid CPU load / input overflows.
+  debug_wake: false
+  wake_log_every: 100
+  debug_audio: false
+  audio_log_every: 100

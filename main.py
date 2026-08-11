@@ -177,6 +177,56 @@ def main() -> None:
     voice_status = recognizer.status
 
     # ---------------------------------------------------------------
+    # Wake word sensitivity ("quiet mode")
+    # ---------------------------------------------------------------
+    from voice.sensitivity import SensitivityManager
+    from macros.executor import SYSTEM_QUIET_MODE, SYSTEM_NORMAL_MODE
+
+    speaker_device = voice_cfg.get("speaker_device", "default")
+    sensitivity_mgr = SensitivityManager(
+        detector=detector,
+        default_threshold=float(voice_cfg.get("wake_word_threshold", 0.5)),
+    )
+
+    def _play_tone_sequence(tones) -> None:
+        """Play a short sequence of (freq_hz, dur_s) tones on the speaker."""
+        import numpy as _np
+        import sounddevice as _sd
+
+        try:
+            _info = _sd.query_devices(speaker_device, kind="output")
+            _rate = int(_info.get("default_samplerate", 16000))
+        except Exception:
+            _rate = 16000
+        for _freq, _dur in tones:
+            for _trial_rate in (_rate, 48000, 44100, 16000):
+                try:
+                    _samples = int(round(_dur * _trial_rate))
+                    if _samples <= 0:
+                        raise ValueError("tone too short")
+                    _t = _np.arange(_samples, dtype=_np.float32) / float(_trial_rate)
+                    _wave = (0.3 * _np.sin(2.0 * _np.pi * _freq * _t)).astype(_np.float32)
+                    _sd.play(_wave, samplerate=int(_trial_rate), device=speaker_device, blocking=True)
+                    break
+                except Exception:
+                    continue
+
+    def _enter_quiet_mode() -> None:
+        sensitivity_mgr.suppress()
+        _play_tone_sequence([(880.0, 0.15), (440.0, 0.25)])
+
+    def _leave_quiet_mode() -> None:
+        sensitivity_mgr.cancel()
+        _play_tone_sequence([(440.0, 0.15), (880.0, 0.25)])
+
+    macro_executor.set_system_actions(
+        {
+            SYSTEM_QUIET_MODE: _enter_quiet_mode,
+            SYSTEM_NORMAL_MODE: _leave_quiet_mode,
+        }
+    )
+
+    # ---------------------------------------------------------------
     # Flask API
     # ---------------------------------------------------------------
     from api.server import create_app
@@ -187,6 +237,7 @@ def main() -> None:
         macro_executor=macro_executor,
         voice_store=voice_store,
         voice_status=voice_status,
+        sensitivity_mgr=sensitivity_mgr,
     )
 
     flask_thread = threading.Thread(
