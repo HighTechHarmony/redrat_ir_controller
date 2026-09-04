@@ -27,6 +27,12 @@ voice:
   # For the reSpeaker HAT (WM8960 codec) this is typically 0.
   speaker_device: 0
 
+  # ALSA output device for text-to-speech via espeak-ng.
+  # This is an ALSA device name, not a sounddevice index.
+  # Run `aplay -L` to list available devices.
+  tts_device: "plughw:2,0"
+  tts_timeout_s: 30
+
   # openWakeWord model name (built-in) or path to a custom .onnx/.tflite file.
   # Built-in options usually include version suffixes like "hey_jarvis_v0.1".
   wake_word_model: "hey_jarvis_v0.1"

@@ -148,6 +148,7 @@ sudo apt install -y \
   libportaudio2 \       # sounddevice / PortAudio runtime
   portaudio19-dev \     # PortAudio headers (needed to build sounddevice wheel)
   libasound2-dev \      # ALSA headers
+  espeak-ng \            # REST text-to-speech output
   unzip curl            # for the model download script
 ```
 
@@ -262,6 +263,12 @@ voice:
   # Run `python -m sounddevice` to list available output devices.
   # For the reSpeaker HAT (WM8960 codec) this is typically 0.
   speaker_device: 0
+
+  # ALSA output device for REST text-to-speech via espeak-ng.
+  # Unlike speaker_device, this is an ALSA device name, not a sounddevice index.
+  # Run `aplay -L` to list available devices.
+  tts_device: "default"
+  tts_timeout_s: 30
 
   # openWakeWord model name (built-in) or path to a custom .onnx/.tflite file.
   wake_word_model: "hey_jarvis_v0.1"
@@ -449,6 +456,7 @@ GET    /api/macros/export               download macros.yaml
 POST   /api/macros/import               upload and replace macros.yaml
 
 GET    /api/voice/status                STT pipeline + sensitivity state
+POST   /api/voice/speak                 speak text synchronously via espeak-ng (body: {"text": "Hello"})
 GET    /api/voice/sensitivity           current sensitivity (threshold, remaining)
 POST   /api/voice/sensitivity/suppress   enter quiet mode (body: {"seconds": 3600})
 POST   /api/voice/sensitivity/cancel     exit quiet mode immediately
@@ -461,6 +469,14 @@ POST   /api/voice/commands/import       upload and replace voice_commands.yaml
 
 GET    /api/devices                     enumerate LIRC devices
 GET    /api/device/diagnostics          run device self-check
+```
+
+To speak text through the configured `voice.tts_device`:
+
+```bash
+curl -X POST http://<host>:5000/api/voice/speak \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Hello from the RedRat controller"}'
 ```
 
 Adding or updating a voice command via the API (or the web UI) takes effect

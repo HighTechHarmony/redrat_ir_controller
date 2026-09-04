@@ -17,6 +17,7 @@ from redrat.lirc_device import LircDevice, LircError
 
 from redrat.store import SignalNotFoundError, SignalStore
 from voice.store import VoiceCommandNotFoundError, VoiceCommandStore
+from voice.tts import TextToSpeech, TtsPlaybackError, TtsTimeoutError, TtsUnavailableError
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ _macro_executor: MacroExecutor | None = None
 _voice_store: VoiceCommandStore | None = None
 _voice_status: dict = {"state": "unavailable"}
 _sensitivity_mgr: object | None = None
+_tts: TextToSpeech | None = None
 
 _bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -46,15 +48,17 @@ def create_app(
     voice_store: VoiceCommandStore,
     voice_status: dict,
     sensitivity_mgr=None,
+    tts: TextToSpeech | None = None,
 ) -> Flask:
     """Create and configure the Flask application."""
-    global _device, _signal_store, _macro_executor, _voice_store, _voice_status, _sensitivity_mgr
+    global _device, _signal_store, _macro_executor, _voice_store, _voice_status, _sensitivity_mgr, _tts
     _device = device
     _signal_store = signal_store
     _macro_executor = macro_executor
     _voice_store = voice_store
     _voice_status = voice_status
     _sensitivity_mgr = sensitivity_mgr
+    _tts = tts
 
     app = Flask(__name__)
     app.register_blueprint(_bp)
@@ -95,6 +99,7 @@ def api_index():
                 ],
                 "voice": [
                     "GET /api/voice/status",
+                  "POST /api/voice/speak",
                     "GET /api/voice/sensitivity",
                     "POST /api/voice/sensitivity/suppress",
                     "POST /api/voice/sensitivity/cancel",
@@ -414,6 +419,34 @@ def voice_status():
     if _sensitivity_mgr is not None:
         data["sensitivity"] = _sensitivity_mgr.status
     return _ok(data)
+
+@_bp.route("/voice/speak", methods=["POST"])
+def speak_text():
+    if _tts is None:
+        return _err("Text-to-speech is unavailable", 503)
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _err("Request body must be a JSON object")
+    text = body.get("text")
+    if not isinstance(text, str):
+        return _err("'text' must be a string")
+    text = text.strip()
+    if not text:
+        return _err("'text' must not be empty")
+    if len(text) > 500:
+        return _err("'text' must be 500 characters or fewer")
+
+    try:
+        _tts.speak(text)
+    except TtsUnavailableError as exc:
+        log.error("Text-to-speech unavailable: %s", exc)
+        return _err(str(exc), 503)
+    except (TtsPlaybackError, TtsTimeoutError) as exc:
+        log.error("Text-to-speech playback failed: %s", exc)
+        return _err(str(exc), 502)
+
+    return _ok({"spoken": True, "text": text})
 
 
 @_bp.route("/voice/sensitivity", methods=["GET"])
@@ -1144,6 +1177,7 @@ def _api_docs_html() -> str:
 
     <h2>Voice Commands</h2>
     <div class="route"><span class="method">GET</span><span class="path">/api/voice/status</span><span class="desc">Returns STT pipeline state (<code>"idle"</code>, <code>"listening"</code>, <code>"recognizing"</code>) plus current sensitivity info.</span></div>
+    <div class="route"><span class="method">POST</span><span class="path">/api/voice/speak</span><span class="desc">Speak text synchronously through espeak-ng. Body: <code>{"text": "Hello"}</code>.</span></div>
     <div class="route"><span class="method">GET</span><span class="path">/api/voice/commands</span><span class="desc">List all voice command mappings.</span></div>
     <div class="route"><span class="method">POST</span><span class="path">/api/voice/commands</span><span class="desc">Add a voice command. Body: <code>{"phrase": "turn on projector", "macro": "projector_on"}</code>.</span></div>
     <div class="route"><span class="method">PUT</span><span class="path">/api/voice/commands/&lt;id&gt;</span><span class="desc">Update a voice command. Body: <code>{"phrase": "new phrase"}</code> and/or <code>{"macro": "new_macro"}</code>.</span></div>

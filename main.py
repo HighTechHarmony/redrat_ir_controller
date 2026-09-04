@@ -109,6 +109,7 @@ def main() -> None:
     from voice.wake_word import WakeWordDetector
     from voice.stt import SpeechRecognizer
     from voice.command_matcher import CommandMatcher
+    from voice.tts import TextToSpeech
 
     voice_status: dict = {"state": "starting"}
 
@@ -238,6 +239,10 @@ def main() -> None:
         voice_store=voice_store,
         voice_status=voice_status,
         sensitivity_mgr=sensitivity_mgr,
+        tts=TextToSpeech(
+            device=str(voice_cfg.get("tts_device", "default")),
+            timeout_s=float(voice_cfg.get("tts_timeout_s", 30)),
+        ),
     )
 
     flask_thread = threading.Thread(
