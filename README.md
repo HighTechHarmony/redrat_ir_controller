@@ -145,12 +145,16 @@ pyenv local 3.11.15            # writes .python-version; already committed
 ```bash
 sudo apt update
 sudo apt install -y \
-  libportaudio2 \       # sounddevice / PortAudio runtime
-  portaudio19-dev \     # PortAudio headers (needed to build sounddevice wheel)
-  libasound2-dev \      # ALSA headers
-  espeak-ng \            # REST text-to-speech output
-  unzip curl            # for the model download script
+  libportaudio2 \
+  portaudio19-dev \
+  libasound2-dev \
+  espeak-ng \
+  unzip curl
 ```
+
+`libportaudio2` is used at runtime by `sounddevice`; `portaudio19-dev` and
+`libasound2-dev` provide headers for native audio builds; `espeak-ng` provides
+local text-to-speech; and `unzip`/`curl` are used by the model download script.
 
 ### reSpeaker HAT (seeed-voicecard)
 
@@ -211,26 +215,46 @@ sudo usermod -aG video scott
 ## Installation
 
 ```bash
-# 1. Clone the repo
+# 1. Install system dependencies
+sudo apt update
+sudo apt install -y \
+  git \
+  python3 \
+  python3-venv \
+  python3-dev \
+  build-essential \
+  libportaudio2 \
+  portaudio19-dev \
+  libasound2-dev \
+  espeak-ng \
+  unzip \
+  curl
+
+# 2. Clone the repo
 git clone https://github.com/your-org/redrat_ir_controller.git
 cd redrat_ir_controller
 
-# 2. Create a virtual environment using Python 3.11
+# 3. Create a virtual environment using Python 3.11
 #    (pyenv local 3.11.15 must already be in effect, or use the full path)
 python -m venv .venv
 source .venv/bin/activate
 
-# 3. Upgrade pip and install dependencies
+# 4. Upgrade pip and install Python dependencies
 pip install -U pip setuptools wheel
 pip install -r requirements.txt
 
-# 4. Download speech / wake-word models (~200 MB total)
+# 5. Download speech / wake-word models (~200 MB total)
 bash scripts/download_models.sh
 
-# 5. Copy and edit the config
+# 6. Copy and edit the config
 cp config/config_example.yaml config/config.yaml
 # Edit config/config.yaml — see Configuration section below
 ```
+
+On a standard Raspberry Pi OS Bookworm image, the system Python is already
+Python 3.11. If `python3 --version` reports an older version, install Python
+3.11 with pyenv as described in [Software Prerequisites](#software-prerequisites)
+before creating the virtual environment.
 
 ---
 
@@ -267,7 +291,9 @@ voice:
   # ALSA output device for REST text-to-speech via espeak-ng.
   # Unlike speaker_device, this is an ALSA device name, not a sounddevice index.
   # Run `aplay -L` to list available devices.
-  tts_device: "default"
+  # The reSpeaker WM8960 uses card 2 on the reference setup. `plughw` allows
+  # espeak-ng's 22050 Hz output to be converted to the codec's supported rate.
+  tts_device: "plughw:2,0"
   tts_timeout_s: 30
 
   # openWakeWord model name (built-in) or path to a custom .onnx/.tflite file.
