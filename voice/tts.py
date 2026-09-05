@@ -54,5 +54,5 @@ class TextToSpeech:
         except OSError as exc:
             raise TtsUnavailableError("could not start espeak-ng") from exc
 
-        if result.returncode != 0:
+        if result.returncode != 0 or (getattr(result, "stderr", "") or "").strip():
             raise TtsPlaybackError("speech playback failed")

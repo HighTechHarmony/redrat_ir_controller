@@ -156,7 +156,7 @@ class SpeechRecognizer:
                     tone1 = (0.3 * np.sin(2.0 * np.pi * freq1 * t)).astype(np.float32)
                     tone2 = (0.3 * np.sin(2.0 * np.pi * freq2 * t)).astype(np.float32)
                     wave = np.concatenate((tone1, tone2))
-                    _sd.play(wave, samplerate=int(trial_rate), device=device, blocking=False)
+                    _sd.play(wave, samplerate=int(trial_rate), device=device, blocking=True)
                     last_exc = None
                     break
                 except Exception as _exc:

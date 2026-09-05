@@ -112,6 +112,16 @@ def test_speak_endpoint_reports_nonzero_exit():
     assert response.get_json() == {"error": "speech playback failed"}
 
 
+def test_speak_endpoint_reports_stderr_playback_failures():
+    runner = FakeRunner(result=SimpleNamespace(returncode=0, stderr="Device or resource busy"))
+    client = make_client(TextToSpeech(runner=runner))
+
+    response = client.post("/api/voice/speak", json={"text": "Hello"})
+
+    assert response.status_code == 502
+    assert response.get_json() == {"error": "speech playback failed"}
+
+
 def test_speak_endpoint_is_unavailable_without_tts_service():
     client = make_client(None)
 
