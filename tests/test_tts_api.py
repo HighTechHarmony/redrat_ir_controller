@@ -112,7 +112,7 @@ def test_speak_endpoint_reports_nonzero_exit():
     assert response.get_json() == {"error": "speech playback failed"}
 
 
-def test_speak_endpoint_reports_stderr_playback_failures():
+def test_speak_endpoint_logs_stderr_playback_failures(caplog):
     runner = FakeRunner(result=SimpleNamespace(returncode=0, stderr="Device or resource busy"))
     client = make_client(TextToSpeech(runner=runner))
 
@@ -120,6 +120,7 @@ def test_speak_endpoint_reports_stderr_playback_failures():
 
     assert response.status_code == 502
     assert response.get_json() == {"error": "speech playback failed"}
+    assert "device='default' returncode=0 stderr='Device or resource busy'" in caplog.text
 
 
 def test_speak_endpoint_is_unavailable_without_tts_service():

@@ -17,6 +17,11 @@ class TtsUnavailableError(TtsError):
 class TtsPlaybackError(TtsError):
     """The speech executable failed to play the text."""
 
+    def __init__(self, message: str, *, returncode: int | None = None, stderr: str = "") -> None:
+        super().__init__(message)
+        self.returncode = returncode
+        self.stderr = stderr
+
 
 class TtsTimeoutError(TtsPlaybackError):
     """Speech playback exceeded its timeout."""
@@ -54,5 +59,10 @@ class TextToSpeech:
         except OSError as exc:
             raise TtsUnavailableError("could not start espeak-ng") from exc
 
-        if result.returncode != 0 or (getattr(result, "stderr", "") or "").strip():
-            raise TtsPlaybackError("speech playback failed")
+        stderr = (getattr(result, "stderr", "") or "").strip()
+        if result.returncode != 0 or stderr:
+            raise TtsPlaybackError(
+                "speech playback failed",
+                returncode=result.returncode,
+                stderr=stderr,
+            )

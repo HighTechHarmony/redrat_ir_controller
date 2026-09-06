@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 import numpy as np
+from voice.tones import play_tones
 
 log = logging.getLogger(__name__)
 
@@ -130,41 +131,11 @@ class SpeechRecognizer:
         freq2: float,
         dur: float = 0.15,
     ) -> None:
-        """Play two sequential sine tones (non-blocking) via sounddevice.
-
-        freq1, freq2 — frequencies in Hz for the first and second tone.
-        dur         — duration in seconds for each tone segment.
-        Failures are logged at DEBUG level — never raises.
-        """
+        """Play two sequential sine tones through the shared ALSA mixer."""
         try:
-            import sounddevice as _sd
-
-            device = getattr(self, "_beep_device", None)
-            try:
-                info = _sd.query_devices(device, kind="output")
-                rate = int(info.get("default_samplerate", 16000))
-            except Exception:
-                rate = 16000
-
-            last_exc = None
-            for trial_rate in (rate, 48000, 44100, 16000):
-                try:
-                    samples = int(round(dur * float(trial_rate)))
-                    if samples <= 0:
-                        raise ValueError("tone duration too small")
-                    t = np.arange(samples, dtype=np.float32) / float(trial_rate)
-                    tone1 = (0.3 * np.sin(2.0 * np.pi * freq1 * t)).astype(np.float32)
-                    tone2 = (0.3 * np.sin(2.0 * np.pi * freq2 * t)).astype(np.float32)
-                    wave = np.concatenate((tone1, tone2))
-                    _sd.play(wave, samplerate=int(trial_rate), device=device, blocking=True)
-                    last_exc = None
-                    break
-                except Exception as _exc:
-                    last_exc = _exc
-            if last_exc is not None:
-                log.warning("Tone playback failed: %s", last_exc)
-        except Exception:
-            log.debug("sounddevice not available for tone playback")
+            play_tones([(freq1, dur), (freq2, dur)], self._beep_device)
+        except Exception as exc:
+            log.warning("Tone playback failed: %s", exc)
 
     def _play_failure_pattern(self) -> None:
         """Play three 800 Hz beeps (0.25s each, 0.10s spacing) — blocking.
@@ -172,41 +143,9 @@ class SpeechRecognizer:
         Indicates a voice command was heard but failed to execute.
         """
         try:
-            import sounddevice as _sd
-
-            device = getattr(self, "_beep_device", None)
-            try:
-                info = _sd.query_devices(device, kind="output")
-                rate = int(info.get("default_samplerate", 16000))
-            except Exception:
-                rate = 16000
-
-            beep_dur = 0.25
-            gap_dur = 0.10
-            freq = 800.0
-
-            last_exc = None
-            for trial_rate in (rate, 48000, 44100, 16000):
-                try:
-                    samples = int(round(beep_dur * float(trial_rate)))
-                    if samples <= 0:
-                        raise ValueError("beep duration too small")
-                    t = np.arange(samples, dtype=np.float32) / float(trial_rate)
-                    beep_wave = (0.3 * np.sin(2.0 * np.pi * freq * t)).astype(np.float32)
-
-                    for i in range(3):
-                        _sd.play(beep_wave, samplerate=int(trial_rate), device=device, blocking=True)
-                        if i < 2:
-                            time.sleep(gap_dur)
-
-                    last_exc = None
-                    break
-                except Exception as _exc:
-                    last_exc = _exc
-            if last_exc is not None:
-                log.warning("Failure pattern playback failed: %s", last_exc)
-        except Exception:
-            log.debug("sounddevice not available for failure pattern")
+            play_tones([(800.0, 0.25)] * 3, self._beep_device, gap_s=0.10)
+        except Exception as exc:
+            log.warning("Failure pattern playback failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -281,41 +220,12 @@ class SpeechRecognizer:
                     self._play_failure_pattern()
             else:
                 log.info("No command recognised (transcript=%r)", transcript)
-                # Play a short timeout tone one octave down (half frequency)
                 try:
-                    import sounddevice as _sd
-
-                    device = getattr(self, "_beep_device", None)
                     base_freq = float(getattr(self, "_beep_freq", 800))
                     freq = max(20.0, base_freq / 2.0)
                     duration = float(getattr(self, "_beep_duration_s", 0.5))
-
-                    # Query output device default samplerate and fall back
-                    # to 16000 Hz.
-                    try:
-                        info = _sd.query_devices(device, kind="output")
-                        rate = int(info.get("default_samplerate", 16000))
-                    except Exception:
-                        rate = 16000
-
-                    # Generate the timeout tone at the trial playback rate so
-                    # pitch/duration remain correct when falling back rates.
-                    last_exc = None
-                    for trial_rate in (rate, 48000, 44100, 16000):
-                        try:
-                            samples = int(round(duration * float(trial_rate)))
-                            if samples <= 0:
-                                raise ValueError("timeout beep duration too small")
-                            t = np.arange(samples, dtype=np.float32) / float(trial_rate)
-                            wave = (0.3 * np.sin(2.0 * np.pi * float(freq) * t)).astype(np.float32)
-                            _sd.play(wave, samplerate=int(trial_rate), device=device, blocking=False)
-                            last_exc = None
-                            break
-                        except Exception as _exc:
-                            last_exc = _exc
-                    if last_exc is not None:
-                        log.warning("Timeout beep playback failed: %s", last_exc)
-                except Exception:
-                    log.debug("sounddevice not available for timeout beep")
+                    play_tones([(freq, duration)], self._beep_device, blocking=False)
+                except Exception as exc:
+                    log.warning("Timeout beep playback failed: %s", exc)
 
         log.debug("STT thread stopped")

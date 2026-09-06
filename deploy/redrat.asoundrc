@@ -1,0 +1,5 @@
+# Install as /home/scott/.asoundrc for the redrat.service user.
+pcm.redrat_mixer {
+    type plug
+    slave.pcm "dmix:CARD=seeed2micvoicec,DEV=0"
+}

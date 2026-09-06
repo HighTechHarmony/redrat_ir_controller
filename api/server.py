@@ -443,7 +443,13 @@ def speak_text():
         log.error("Text-to-speech unavailable: %s", exc)
         return _err(str(exc), 503)
     except (TtsPlaybackError, TtsTimeoutError) as exc:
-        log.error("Text-to-speech playback failed: %s", exc)
+        log.error(
+            "Text-to-speech playback failed: %s (device=%r returncode=%r stderr=%r)",
+            exc,
+            _tts.device,
+            getattr(exc, "returncode", None),
+            getattr(exc, "stderr", ""),
+        )
         return _err(str(exc), 502)
 
     return _ok({"spoken": True, "text": text})

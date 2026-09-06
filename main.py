@@ -181,6 +181,7 @@ def main() -> None:
     # Wake word sensitivity ("quiet mode")
     # ---------------------------------------------------------------
     from voice.sensitivity import SensitivityManager
+    from voice.tones import play_tones
     from macros.executor import SYSTEM_QUIET_MODE, SYSTEM_NORMAL_MODE
 
     speaker_device = voice_cfg.get("speaker_device", "default")
@@ -191,26 +192,7 @@ def main() -> None:
 
     def _play_tone_sequence(tones) -> None:
         """Play a short sequence of (freq_hz, dur_s) tones on the speaker."""
-        import numpy as _np
-        import sounddevice as _sd
-
-        try:
-            _info = _sd.query_devices(speaker_device, kind="output")
-            _rate = int(_info.get("default_samplerate", 16000))
-        except Exception:
-            _rate = 16000
-        for _freq, _dur in tones:
-            for _trial_rate in (_rate, 48000, 44100, 16000):
-                try:
-                    _samples = int(round(_dur * _trial_rate))
-                    if _samples <= 0:
-                        raise ValueError("tone too short")
-                    _t = _np.arange(_samples, dtype=_np.float32) / float(_trial_rate)
-                    _wave = (0.3 * _np.sin(2.0 * _np.pi * _freq * _t)).astype(_np.float32)
-                    _sd.play(_wave, samplerate=int(_trial_rate), device=speaker_device, blocking=True)
-                    break
-                except Exception:
-                    continue
+        play_tones(tones, speaker_device)
 
     def _enter_quiet_mode() -> None:
         sensitivity_mgr.suppress()
@@ -284,42 +266,10 @@ def main() -> None:
     recognizer.start()
 
     # Play a startup beep to indicate successful boot.
-    # Use the same fallback-rate strategy as the wake/STT beeps: try the
-    # device's reported default samplerate first, then common codec rates.
-    # At boot the codec is often still locked to a different clock than the
-    # input stream (e.g. 48 kHz vs. 16 kHz), so the single-attempt approach
-    # used to fail with paInvalidSampleRate and silently skip the beep.
     try:
-        import numpy as np
-        import sounddevice as _sd
-
-        _boot_device = voice_cfg.get("speaker_device", "default")
         _boot_freq = int(voice_cfg.get("beep_freq_hz", 800))
         _boot_dur = float(voice_cfg.get("beep_duration_s", 0.5))
-        try:
-            _info = _sd.query_devices(_boot_device, kind="output")
-            _rate = int(_info.get("default_samplerate", 16000))
-        except Exception:
-            _rate = 16000
-
-        if _boot_dur <= 0:
-            raise ValueError("beep_duration_s too small")
-
-        _last_exc = None
-        for _trial_rate in (_rate, 48000, 44100, 16000):
-            try:
-                _samples = int(round(_boot_dur * _trial_rate))
-                if _samples <= 0:
-                    raise ValueError("beep_duration_s too small")
-                _t = np.arange(_samples, dtype=np.float32) / float(_trial_rate)
-                _wave = (0.3 * np.sin(2.0 * np.pi * float(_boot_freq) * _t)).astype(np.float32)
-                _sd.play(_wave, samplerate=int(_trial_rate), device=_boot_device, blocking=True)
-                _last_exc = None
-                break
-            except Exception as _exc:
-                _last_exc = _exc
-        if _last_exc is not None:
-            log.warning("Startup beep failed: %s", _last_exc)
+        play_tones([(_boot_freq, _boot_dur)], speaker_device)
     except Exception as _exc:
         log.warning("Startup beep skipped: %s", _exc)
 

@@ -21,16 +21,13 @@ voice:
   # Use "default" for the system default input device.
   alsa_device: "hw:2,0"
 
-  # Output device for beep/acknowledgement tones.
-  # This is a sounddevice device *index* (not an ALSA name).
-  # Run `python -m sounddevice` to list available output devices.
-  # For the reSpeaker HAT (WM8960 codec) this is typically 0.
-  speaker_device: 0
+  # ALSA output device for beep/acknowledgement tones.
+  # Use the shared ALSA mixer so simultaneous playback is mixed.
+  speaker_device: "redrat_mixer"
 
   # ALSA output device for text-to-speech via espeak-ng.
-  # This is an ALSA device name, not a sounddevice index.
-  # Run `aplay -L` to list available devices.
-  tts_device: "plughw:2,0"
+  # Use the shared ALSA mixer to play alongside acknowledgement tones.
+  tts_device: "redrat_mixer"
   tts_timeout_s: 30
 
   # openWakeWord model name (built-in) or path to a custom .onnx/.tflite file.

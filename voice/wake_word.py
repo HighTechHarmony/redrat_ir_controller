@@ -14,6 +14,7 @@ from typing import Optional
 
 import numpy as np
 from voice.audio import FRAME_SAMPLES
+from voice.tones import play_tones
 
 log = logging.getLogger(__name__)
 
@@ -249,9 +250,6 @@ class WakeWordDetector:
                         self._last_fire = now
                         self.wake_event.set()
                         if self._beep_on_wake:
-                            # Play a short beep in a non-blocking way. Import sounddevice lazily.
-                            # Log debug info so we can trace duplicate beeps (thread id
-                            # and timestamp) when diagnosing repeated triggers.
                             try:
                                 log.debug(
                                     "Wake beep requested: freq=%s dur=%.3f device=%r thread=%s",
@@ -260,38 +258,13 @@ class WakeWordDetector:
                                     self._beep_device,
                                     threading.get_ident(),
                                 )
-                                import sounddevice as _sd
-
-                                # Query output device default samplerate and fall back to 16 kHz.
-                                try:
-                                    info = _sd.query_devices(self._beep_device, kind="output")
-                                    rate = int(info.get("default_samplerate", 16000))
-                                except Exception:
-                                    rate = 16000
-
-                                # Determine sample counts and try playing at the device's
-                                # default samplerate first. For each trial rate we
-                                # generate the waveform at that rate so the played
-                                # audio has the correct pitch and duration.
-                                if self._beep_duration_s <= 0:
-                                    raise ValueError("beep_duration_s too small")
-                                last_exc = None
-                                for trial_rate in (rate, 48000, 44100, 16000):
-                                    try:
-                                        samples = int(round(self._beep_duration_s * float(trial_rate)))
-                                        if samples <= 0:
-                                            raise ValueError("beep_duration_s too small")
-                                        t = np.arange(samples, dtype=np.float32) / float(trial_rate)
-                                        wave = (0.3 * np.sin(2.0 * np.pi * float(self._beep_freq) * t)).astype(np.float32)
-                                        _sd.play(wave, samplerate=int(trial_rate), device=self._beep_device, blocking=False)
-                                        last_exc = None
-                                        break
-                                    except Exception as _exc:
-                                        last_exc = _exc
-                                if last_exc is not None:
-                                    log.warning("Beep playback failed: %s", last_exc)
-                            except Exception:
-                                log.debug("sounddevice not available for beep playback or failed to configure")
+                                play_tones(
+                                    [(self._beep_freq, self._beep_duration_s)],
+                                    self._beep_device,
+                                    blocking=False,
+                                )
+                            except Exception as exc:
+                                log.warning("Wake beep playback failed: %s", exc)
 
                         # Cooldown: clear buffer, drain the queue, sleep.
                         buffer = np.array([], dtype=np.int16)

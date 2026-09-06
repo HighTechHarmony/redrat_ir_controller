@@ -282,18 +282,13 @@ voice:
   # reSpeaker 2-mic HAT, `"default"` for the system default.
   alsa_device: "hw:2,0"
 
-  # Output device for beep/acknowledgement tones.  This is a
-  # sounddevice device *index* (not an ALSA device name).
-  # Run `python -m sounddevice` to list available output devices.
-  # For the reSpeaker HAT (WM8960 codec) this is typically 0.
-  speaker_device: 0
+  # ALSA output device for beep/acknowledgement tones.
+  # Use the shared ALSA mixer so simultaneous playback is mixed.
+  speaker_device: "redrat_mixer"
 
   # ALSA output device for REST text-to-speech via espeak-ng.
-  # Unlike speaker_device, this is an ALSA device name, not a sounddevice index.
-  # Run `aplay -L` to list available devices.
-  # The reSpeaker WM8960 uses card 2 on the reference setup. `plughw` allows
-  # espeak-ng's 22050 Hz output to be converted to the codec's supported rate.
-  tts_device: "plughw:2,0"
+  # Use the shared ALSA mixer to play alongside acknowledgement tones.
+  tts_device: "redrat_mixer"
   tts_timeout_s: 30
 
   # openWakeWord model name (built-in) or path to a custom .onnx/.tflite file.
@@ -575,9 +570,10 @@ source .venv/bin/activate && python -m sounddevice
 ```
 
 Set `voice.alsa_device` in `config.yaml` accordingly, e.g. `"hw:2,0"`,
-`"plughw:2,0"`, or `"default"`. To use a separate speaker for beeps, set
-`voice.speaker_device` to the sounddevice output index (run
-`python -m sounddevice` to list).
+`"plughw:2,0"`, or `"default"`. Configure both `voice.speaker_device` and
+`voice.tts_device` with the same ALSA `dmix` PCM to allow notification tones
+and speech to play concurrently. For the reSpeaker HAT, use
+`"redrat_mixer"`, defined in `~/.asoundrc` from `deploy/redrat.asoundrc`.
 
 ### Built-in voice commands
 
@@ -712,13 +708,13 @@ the first supported rate. If you don't hear it:
 
 1. Test the speaker hardware directly:
    ```bash
-   aplay -D plughw:2,0 beep.wav   # hardware test (reSpeaker HAT = card 2)
+  aplay -D redrat_mixer beep.wav
    ```
 2. If `aplay` works but the beep still doesn't, check the journal for
    `Startup beep failed` warnings.
-3. Verify `speaker_device` is the correct sounddevice index:
+3. Verify the configured shared PCM exists:
    ```bash
-   .venv/bin/python -m sounddevice | head -5
+  aplay -L | grep redrat_mixer
    ```
 
 ### No audio / wake word after a power outage
